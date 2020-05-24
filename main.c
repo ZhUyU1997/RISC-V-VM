@@ -1,6 +1,16 @@
 #include <stdio.h>
 #include <math.h>
 #include <float.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <string.h>
+#include <stdlib.h>
+
+#define LOGD(...)
+#define LOGI(...) printf(__VA_ARGS__)
 
 #define PSEUDO_INSTRUCTIONS
 
@@ -18,12 +28,9 @@ typedef signed long long s64_t;
 typedef signed int s32_t;
 typedef signed short s16_t;
 typedef signed char s8_t;
-typedef unsigned int register_t;
+typedef u32_t reg_t;
 
-u32_t text[1024], // text segment
-	stack[1024];  // stack
-
-u8_t memory[1024]; // data segment
+u8_t memory[1024*4];
 u32_t *CSRs;
 u32_t pc = 0, x[33]; // virtual machine registers
 
@@ -240,7 +247,7 @@ enum
 #define GET_S_IMM(ins) (GET_EXT((ins), 21) | GET_FIXED_R((ins), 25, 6, 5) | GET_FIXED_R((ins), 8, 4, 1) | GET_FIXED_R((ins), 7, 1, 0))
 #define GET_B_IMM(ins) (GET_EXT((ins), 20) | GET_FIXED_L((ins), 7, 1, 11) | GET_FIXED_R((ins), 25, 6, 5) | GET_FIXED_R((ins), 8, 4, 1))
 #define GET_U_IMM(ins) (GET_FIXED((ins), 12, 20))
-#define GET_J_IMM(ins) (GET_EXT(ins, 12) | GET_FIXED((ins), 12, 8) | GET_FIXED_R((ins), 20, 11, 11) | GET_FIXED_R((ins), 25, 6, 5) | GET_FIXED_R((ins), 21, 4, 1))
+#define GET_J_IMM(ins) (GET_EXT(ins, 12) | GET_FIXED((ins), 12, 8) | GET_FIXED_R((ins), 20, 1, 11) | GET_FIXED_R((ins), 25, 6, 5) | GET_FIXED_R((ins), 21, 4, 1))
 
 #define GET_I_INS(imm) (GET_FIXED_L((imm), 0, 12, 20))
 #define GET_S_INS(imm) (GET_FIXED_L((imm), 5, 7, 25) | GET_FIXED_L((imm), 0, 5, 7))
@@ -400,125 +407,146 @@ void classify_print(int i)
 	switch (i)
 	{
 	case 0:
-		printf("[rs1]为−∞");
+		LOGD("[rs1]为−∞");
 		break;
 	case 1:
-		printf("[rs1]是负规格化数");
+		LOGD("[rs1]是负规格化数");
 		break;
 	case 2:
-		printf("[rs1]是负的非规格化数");
+		LOGD("[rs1]是负的非规格化数");
 		break;
 	case 3:
-		printf("[rs1]是-0");
+		LOGD("[rs1]是-0");
 		break;
 	case 4:
-		printf("[rs1]是+0");
+		LOGD("[rs1]是+0");
 		break;
 	case 5:
-		printf("[rs1]是正的非规格化数");
+		LOGD("[rs1]是正的非规格化数");
 		break;
 	case 6:
-		printf("[rs1]是正的规格化数");
+		LOGD("[rs1]是正的规格化数");
 		break;
 	case 7:
-		printf("[rs1]为+∞");
+		LOGD("[rs1]为+∞");
 		break;
 	case 8:
-		printf("[rs1]是信号(signaling)NaN");
+		LOGD("[rs1]是信号(signaling)NaN");
 		break;
 	case 9:
-		printf("[rs1]是一个安静(quiet)NaN");
+		LOGD("[rs1]是一个安静(quiet)NaN");
 		break;
 
 	default:
 		break;
 	}
-	printf("\n");
+	LOGD("\n");
 }
 
 void eval()
 {
 	for (;;)
 	{
-		// printf("PC=%08x\n", pc);
-		u32_t ins = text[pc >> 2];
-		pc += 4;
+		u32_t ins;
+JUMP:	ins = M32(pc);
+		LOGD("PC=%08x INS=%08X\n", pc, ins);
 		switch (OPCODE(ins))
 		{
 		case 0b0110111: //U lui
 		{
-			register_t rd = GET(ins, 7, 5);
+			reg_t rd = GET(ins, 7, 5);
 			X(rd) = GET_U_IMM(ins);
 			break;
 		}
 		case 0b0010111: //U auipc
 		{
-			register_t rd = GET(ins, 7, 5);
-			x[GET(ins, 7, 5)] = pc + GET_U_IMM(ins);
+			reg_t rd = GET(ins, 7, 5);
+			X(rd) = pc + GET_U_IMM(ins);
 			break;
 		}
 		case 0b1101111: //J jal
 		{
-			register_t rd = GET(ins, 7, 5);
+			reg_t rd = GET(ins, 7, 5);
 			X(rd) = pc + 4;
 			pc += GET_J_IMM(ins);
-			// printf("jal %08X X[0]=%d\n", pc,x[0]);
+			LOGD("jal %08X X[%d]=%d offset=%08X\n", pc,rd,x[rd],GET_J_IMM(ins));
+			goto JUMP;
 			break;
 		}
 		case 0b1100111: //I jalr
 		{
-			register_t rd = GET(ins, 7, 5);
-			register_t rs1 = GET(ins, 15, 5);
+			reg_t rd = GET(ins, 7, 5);
+			reg_t rs1 = GET(ins, 15, 5);
 			u32_t t = pc + 4;
-			pc = (x[rs1] + GET_I_IMM(ins)) & ~1;
+			u32_t offset = GET_I_IMM(ins);
+			pc = (x[rs1] + offset) & ~1;
 			X(rd) = t;
+			goto JUMP;
 			break;
 		}
 		case 0b1100011: //B
 		{
 			int funct3 = GET(ins, 12, 3);
-			register_t rs1 = GET(ins, 15, 5);
-			register_t rs2 = GET(ins, 20, 5);
+			reg_t rs1 = GET(ins, 15, 5);
+			reg_t rs2 = GET(ins, 20, 5);
 			u32_t offset = GET_B_IMM(ins);
 			switch (funct3)
 			{
 			case 0b000: //beq
 			{
 				if (x[rs1] == x[rs2])
+				{
 					pc += offset;
+					goto JUMP;
+				}
 				break;
 			}
 			case 0b001: //bne
 			{
-				// printf("bne offset=%08X, x[%d]=%d, x[%d]=%d\n", offset, rs1,(x[rs1]), rs2,(x[rs2]));
+				LOGD("bne offset=%08X, x[%d]=%d, x[%d]=%d\n", offset, rs1,(x[rs1]), rs2,(x[rs2]));
 				if (x[rs1] != x[rs2])
+				{
 					pc += offset;
+					goto JUMP;
+				}
 				break;
 			}
 			case 0b100: //blt
 			{
 				if (SIGNED(x[rs1]) < SIGNED(x[rs2]))
+				{
 					pc += offset;
+					goto JUMP;
+				}
 				break;
 			}
 			case 0b101: //bge
 			{
-				// printf("bge offset=%08X, x[%d]=%d, x[%d]=%d\n", offset, rs1,SIGNED(x[rs1]), rs2,SIGNED(x[rs2]));
+				// LOGD("bge offset=%08X, x[%d]=%d, x[%d]=%d\n", offset, rs1,SIGNED(x[rs1]), rs2,SIGNED(x[rs2]));
 				if (SIGNED(x[rs1]) >= SIGNED(x[rs2]))
+				{
 					pc += offset;
+					goto JUMP;
+				}
 				break;
 			}
 			case 0b110: //bltu
 			{
-				// printf("bltu offset=%08X, x[%d]=%u x[%d]=%u\n", offset, rs1,UNSIGNED(x[rs1]), rs2,UNSIGNED(x[rs2]));
+				// LOGD("bltu offset=%08X, x[%d]=%u x[%d]=%u\n", offset, rs1,UNSIGNED(x[rs1]), rs2,UNSIGNED(x[rs2]));
 				if (UNSIGNED(x[rs1]) < UNSIGNED(x[rs2]))
+				{
 					pc += offset;
+					goto JUMP;
+				}
 				break;
 			}
 			case 0b111: //bgeu
 			{
 				if (UNSIGNED(x[rs1]) >= UNSIGNED(x[rs2]))
+				{
 					pc += offset;
+					goto JUMP;
+				}
 				break;
 			}
 			default:
@@ -529,34 +557,38 @@ void eval()
 		case 0b0000011: //I
 		{
 			int funct3 = GET(ins, 12, 3);
-			register_t rs1 = GET(ins, 15, 5);
+			reg_t rs1 = GET(ins, 15, 5);
 			u32_t offset = GET_I_IMM(ins);
-			register_t rd = GET(ins, 7, 5);
+			reg_t rd = GET(ins, 7, 5);
 			switch (funct3)
 			{
 			case 0b000: //lb
 			{
+				LOGD("x%d=s8[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset,(s8_t)(M(x[rs1] + offset)));
 				X(rd) = (s8_t)(M(x[rs1] + offset));
 				break;
 			}
 			case 0b001: //lh
 			{
+				LOGD("x%d=s16[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset,(s16_t)(M(x[rs1] + offset)));
 				X(rd) = (s16_t)(M(x[rs1] + offset));
 				break;
 			}
 			case 0b010: //lw
 			{
-				// printf("ins = %08X x%d = [x%d(%u) + (%d)](%d)\n", ins,rd, rs1, x[rs1], offset,(s32_t)(M(x[rs1] + offset)));
+				LOGD("x%d=s32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset,(s32_t)(M(x[rs1] + offset)));
 				X(rd) = (s32_t)(M(x[rs1] + offset));
 				break;
 			}
 			case 0b100: //lbu
 			{
+				LOGD("x%d=s32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset,(s32_t)(M(x[rs1] + offset)));
 				X(rd) = (u8_t)(M(x[rs1] + offset));
 				break;
 			}
 			case 0b101: //lhu
 			{
+				LOGD("x%d=u32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset,(u32_t)(M(x[rs1] + offset)));
 				X(rd) = (u16_t)(M(x[rs1] + offset));
 				break;
 			}
@@ -568,25 +600,34 @@ void eval()
 		case 0b0100011: //S
 		{
 			int funct3 = GET(ins, 12, 3);
-			register_t rs1 = GET(ins, 15, 5);
-			register_t rs2 = GET(ins, 20, 5);
+			reg_t rs1 = GET(ins, 15, 5);
+			reg_t rs2 = GET(ins, 20, 5);
 			u32_t offset = GET_S_IMM(ins);
 			switch (funct3)
 			{
 			case 0b000: //sb
 			{
+				LOGD("8[x%d(%u) + (%d)] = x%d(%u)\n",rs1, x[rs1], offset, rs2, x[rs2]);
+
 				M8(x[rs1] + offset) = (u8_t)(x[rs2]);
 				break;
 			}
 			case 0b001: //sh
 			{
+				LOGD("16[x%d(%u) + (%d)] = x%d(%u)\n",rs1, x[rs1], offset, rs2, x[rs2]);
+
 				M16(x[rs1] + offset) = (u16_t)(x[rs2]);
 				break;
 			}
 			case 0b010: //sw
 			{
-				// printf("a2=%X j = %d [x%d(%u) + (%d)] = x%d(%u)\n",x[a2],x[a5] ,rs1, x[rs1], offset, rs2, x[rs2]);
-				M32(x[rs1] + offset) = (u32_t)(x[rs2]);
+				LOGD("32[x%d(%u) + offset(%d)] = x%d(%u)\n",rs1, x[rs1], offset, rs2, x[rs2]);
+				if(x[rs1] + offset == 0xffffffff)
+					exit(0);
+				else if(x[rs1] + offset == 0xfffffffe)
+					LOGI("%c",(u32_t)(x[rs2])&0xff);
+				else
+					M32(x[rs1] + offset) = (u32_t)(x[rs2]);
 				break;
 			}
 			default:
@@ -597,13 +638,14 @@ void eval()
 		case 0b0010011: //I
 		{
 			int funct3 = GET(ins, 12, 3);
-			register_t rs1 = GET(ins, 15, 5);
+			reg_t rs1 = GET(ins, 15, 5);
 			u32_t imm = GET_I_IMM(ins);
-			register_t rd = GET(ins, 7, 5);
+			reg_t rd = GET(ins, 7, 5);
 			switch (funct3)
 			{
 			case 0b000: //addi
 			{
+				LOGD("x%d=x%d(%u)+imm(%d)\n",rd,rs1,x[rs1],imm);
 				X(rd) = x[rs1] + imm;
 				break;
 			}
@@ -662,76 +704,82 @@ void eval()
 			int funct3 = GET(ins, 12, 3);
 			int funct7 = GET(ins, 25, 7);
 
-			register_t rs1 = GET(ins, 15, 5);
-			register_t rs2 = GET(ins, 20, 5);
-			register_t rd = GET(ins, 7, 5);
-			switch (funct3)
+			reg_t rs1 = GET(ins, 15, 5);
+			reg_t rs2 = GET(ins, 20, 5);
+			reg_t rd = GET(ins, 7, 5);
+
+			if (funct7 != 0b000001)
 			{
-			case 0b000:
-			{
-				if (funct7 == 0b0000000) //add
+				switch (funct3)
 				{
-					X(rd) = x[rs1] + x[rs2];
-				}
-				else if (funct7 == 0b0100000) //sub
+				case 0b000:
 				{
+					if (funct7 == 0b0000000) //add
+					{
+						X(rd) = x[rs1] + x[rs2];
+					}
+					else if (funct7 == 0b0100000) //sub
+					{
+						X(rd) = x[rs1] - x[rs2];
+					}
+					break;
 				}
-				break;
-			}
-			case 0b001: //sll
-			{
-				X(rd) = UNSIGNED(x[rs1]) << x[rs2];
-				break;
-			}
-			case 0b010: //slt
-			{
-				X(rd) = (SIGNED(x[rs1]) < SIGNED(x[rs2]));
-				break;
-			}
-			case 0b011: //sltu
-			{
-				X(rd) = (UNSIGNED(x[rs1]) < UNSIGNED(x[rs2]));
-				break;
-			}
-			case 0b100: //xor
-			{
-				X(rd) = x[rs1] ^ x[rs2];
-				break;
-			}
-			case 0b101:
-			{
-				if (funct7 == 0b0000000) //srl
+				case 0b001: //sll
 				{
-					X(rd) = (UNSIGNED(x[rs1]) >> x[rs2]);
+					X(rd) = UNSIGNED(x[rs1]) << SIGNED(x[rs2]);
+					break;
 				}
-				else if (funct7 == 0b0100000) //sra (Shift Right Arithmetic)
+				case 0b010: //slt
 				{
-					X(rd) = (SIGNED(x[rs1]) >> x[rs2]);
+					X(rd) = SIGNED(x[rs1]) < SIGNED(x[rs2]);
+					break;
 				}
-				break;
-			}
-			case 0b110: //or
-			{
-				X(rd) = x[rs1] | x[rs2];
-				break;
-			}
-			case 0b111: //and
-			{
-				X(rd) = x[rs1] & x[rs2];
-				break;
+				case 0b011: //sltu
+				{
+					X(rd) = UNSIGNED(x[rs1]) < UNSIGNED(x[rs2]);
+					break;
+				}
+				case 0b100: //xor
+				{
+					X(rd) = x[rs1] ^ x[rs2];
+					break;
+				}
+				case 0b101:
+				{
+					if (funct7 == 0b0000000) //srl
+					{
+						X(rd) = (UNSIGNED(x[rs1]) >> x[rs2]);
+					}
+					else if (funct7 == 0b0100000) //sra (Shift Right Arithmetic)
+					{
+						X(rd) = (SIGNED(x[rs1]) >> x[rs2]);
+					}
+					break;
+				}
+				case 0b110: //or
+				{
+					X(rd) = x[rs1] | x[rs2];
+					break;
+				}
+				case 0b111: //and
+				{
+					X(rd) = x[rs1] & x[rs2];
+					break;
+				}
+
+				default:
+					break;
+				}
 			}
 
-			default:
-				break;
-			}
 
 #ifdef RV32M
 
 			if (funct7 == 0b000001)
 			{
-				register_t rs1 = GET(ins, 15, 5);
-				register_t rs2 = GET(ins, 20, 5);
-				register_t rd = GET(ins, 7, 5);
+				reg_t rs1 = GET(ins, 15, 5);
+				reg_t rs2 = GET(ins, 20, 5);
+				reg_t rd = GET(ins, 7, 5);
 				switch (funct3)
 				{
 				case 0b000: //mul
@@ -805,10 +853,10 @@ void eval()
 		case 0b1110011: //I
 		{
 			int funct3 = GET(ins, 12, 3);
-			register_t rs1 = GET(ins, 15, 5);
-			register_t rs2 = GET(ins, 20, 5);
+			reg_t rs1 = GET(ins, 15, 5);
+			reg_t rs2 = GET(ins, 20, 5);
 			u32_t offset = GET_I_IMM(ins);
-			register_t rd = GET(ins, 7, 5);
+			reg_t rd = GET(ins, 7, 5);
 			u32_t csr = GET(ins, 20, 12);
 			switch (funct3)
 			{
@@ -874,10 +922,10 @@ void eval()
 		}
 		case 0b0000001: //debug
 		{
-			register_t rd = GET(ins, 7, 5);
+			reg_t rd = GET(ins, 7, 5);
 			int funct3 = GET(ins, 12, 3);
 			if (funct3 == 0)
-				printf("x[%d]=%#X|%#d\n", rd, x[rd], x[rd]);
+				LOGD("x[%d]=%#X|%#d\n", rd, x[rd], x[rd]);
 			break;
 		}
 #if defined(RV32F) || defined(RV32D)
@@ -885,8 +933,8 @@ void eval()
 		{
 			int funct3 = GET(ins, 12, 3);
 			u32_t offset = GET_I_IMM(ins);
-			register_t rs1 = GET(ins, 15, 5);
-			register_t rd = GET(ins, 7, 5);
+			reg_t rs1 = GET(ins, 15, 5);
+			reg_t rd = GET(ins, 7, 5);
 
 			switch (funct3)
 			{
@@ -908,8 +956,8 @@ void eval()
 		{
 			int funct3 = GET(ins, 12, 3);
 			u32_t offset = GET_S_IMM(ins);
-			register_t rs1 = GET(ins, 15, 5);
-			register_t rs2 = GET(ins, 20, 5);
+			reg_t rs1 = GET(ins, 15, 5);
+			reg_t rs2 = GET(ins, 20, 5);
 			switch (funct3)
 			{
 			case 0b010: //FSW
@@ -928,10 +976,10 @@ void eval()
 		case 0b1000011: //R
 		{
 			int funct2 = GET(ins, 25, 2);
-			register_t rd = GET(ins, 7, 5);
-			register_t rs1 = GET(ins, 15, 5);
-			register_t rs2 = GET(ins, 20, 5);
-			register_t rs3 = GET(ins, 27, 5);
+			reg_t rd = GET(ins, 7, 5);
+			reg_t rs1 = GET(ins, 15, 5);
+			reg_t rs2 = GET(ins, 20, 5);
+			reg_t rs3 = GET(ins, 27, 5);
 
 			switch (funct2)
 			{
@@ -951,10 +999,10 @@ void eval()
 		case 0b1000111: //R
 		{
 			int funct2 = GET(ins, 25, 2);
-			register_t rd = GET(ins, 7, 5);
-			register_t rs1 = GET(ins, 15, 5);
-			register_t rs2 = GET(ins, 20, 5);
-			register_t rs3 = GET(ins, 27, 5);
+			reg_t rd = GET(ins, 7, 5);
+			reg_t rs1 = GET(ins, 15, 5);
+			reg_t rs2 = GET(ins, 20, 5);
+			reg_t rs3 = GET(ins, 27, 5);
 
 			switch (funct2)
 			{
@@ -974,10 +1022,10 @@ void eval()
 		case 0b1001011: //R
 		{
 			int funct2 = GET(ins, 25, 2);
-			register_t rd = GET(ins, 7, 5);
-			register_t rs1 = GET(ins, 15, 5);
-			register_t rs2 = GET(ins, 20, 5);
-			register_t rs3 = GET(ins, 27, 5);
+			reg_t rd = GET(ins, 7, 5);
+			reg_t rs1 = GET(ins, 15, 5);
+			reg_t rs2 = GET(ins, 20, 5);
+			reg_t rs3 = GET(ins, 27, 5);
 			switch (funct2)
 			{
 			case 0b00: //FNMSUB.S
@@ -996,10 +1044,10 @@ void eval()
 		case 0b1001111: //R
 		{
 			int funct2 = GET(ins, 25, 2);
-			register_t rd = GET(ins, 7, 5);
-			register_t rs1 = GET(ins, 15, 5);
-			register_t rs2 = GET(ins, 20, 5);
-			register_t rs3 = GET(ins, 27, 5);
+			reg_t rd = GET(ins, 7, 5);
+			reg_t rs1 = GET(ins, 15, 5);
+			reg_t rs2 = GET(ins, 20, 5);
+			reg_t rs3 = GET(ins, 27, 5);
 			switch (funct2)
 			{
 			case 0b00: //FNMADD.S
@@ -1020,9 +1068,9 @@ void eval()
 			int funct7 = GET(ins, 25, 7);
 			int funct5 = GET(ins, 20, 5);
 			int funct3 = GET(ins, 12, 3);
-			register_t rd = GET(ins, 7, 5);
-			register_t rs1 = GET(ins, 15, 5);
-			register_t rs2 = GET(ins, 20, 5);
+			reg_t rd = GET(ins, 7, 5);
+			reg_t rs1 = GET(ins, 15, 5);
+			reg_t rs2 = GET(ins, 20, 5);
 			switch (funct7)
 			{
 #ifdef RV32F
@@ -1375,9 +1423,9 @@ void eval()
 		case 0b0101111: //R
 		{
 			int funct5 = GET(ins, 27, 31);
-			register_t rd = GET(ins, 7, 5);
-			register_t rs1 = GET(ins, 15, 5);
-			register_t rs2 = GET(ins, 20, 5);
+			reg_t rd = GET(ins, 7, 5);
+			reg_t rs1 = GET(ins, 15, 5);
+			reg_t rs2 = GET(ins, 20, 5);
 			switch (funct5)
 			{
 			case 0b00010: //LR.W
@@ -1442,74 +1490,52 @@ void eval()
 		}
 #endif
 		default:
-			printf("非法指令\n");
+			LOGD("非法指令\n");
 			return;
 		}
+		pc += 4;
 	}
 }
 
-#define OFF_CALC(target_addr) (target_addr - index * 4 - 4)
-
-void insertion_sort()
+static void read_file(const char *filename)
 {
-	int index = 0;
-	// void insertion_sort(long a[], size_t n)
-	// {
-	// 	for (size_t i = 1, j; i < n; i++)
-	// 	{
-	// 		long x = a[i];
-	// 		for (j = i; j > 0 && a[j - 1] > x; j--)
-	// 		{
-	// 			a[j] = a[j - 1];
-	// 		}
-	// 		a[j] = x;
-	// 	}
-	// }
+	struct stat st;
+	int fd;
+	void *map;
 
-	for (int i = 0; i < 10; i++)
-	{
-		M32(i * 4) = 10 - i;
-		printf("%d ", M32(i * 4));
+	fd = open(filename, O_RDONLY);
+	if (fd < 0) {
+		fprintf(stderr, "error opening file: ");
+		perror(filename);
+		exit(2);
 	}
-	printf("\n");
+	fstat(fd, &st);
+	if (st.st_size == 0) {
+		close(fd);
+		return;
+	}
 
-	X(a3) = 0;
-	X(a1) = 10;
-	X(x1) = 0x52;
-	text[index++] = ADDI(a3, a0, 4); //a3 is pointer to a[i]
-	text[index++] = ADDI(a4, x0, 1); //i = 1
-	//Outer Loop
-	text[index++] = BLTU(a4, a1, OFF_CALC(0x10)); //if i < n, jump to Continue Outer loop
-	//Exit Outer Loop
-	text[index++] = JALR(x0, x1, 0); //return from function
-	//Continue OUter loop
-	text[index++] = LW(a6, a3, 0);	 //x = a[i]
-	text[index++] = ADDI(a2, a3, 0); //a2 is pointer to a[j]
-	text[index++] = ADDI(a5, a4, 0); //j = i
-	//Inner Loop:
-	text[index++] = LW(a7, a2, -4);				 //a7 = a[j-1]
-	text[index++] = BGE(a6, a7, OFF_CALC(0x34)); //if a[j-1] <= a[i], jup to Exit Inner Loop
-	text[index++] = SW(a7, a2, 0);				 //a[j]=a[j-1]
-	text[index++] = ADDI(a5, a5, -1);			 //j--
-	text[index++] = ADDI(a2, a2, -4);			 //decrement a2 to point to a[j]
-	text[index++] = BNE(a5, x0, OFF_CALC(0x1c)); //if j != 0, jump to Inner Loop
-	//Exit Inner Loop:
-	text[index++] = SLLI(a5, a2, 0x2);	  //multiply a5 by 4
-	text[index++] = ADD(a5, a0, a5);	  //a5 is now byte address oi a[j]
-	text[index++] = SW(a6, a5, 0);		  //a[j] = x
-	text[index++] = ADDI(a4, a4, 1);	  //i++
-	text[index++] = ADDI(a3, a3, 4);	  //increment a3 to point to a[i]
-	text[index++] = JAL(x0, OFF_CALC(8)); //jump to Outer Loop
+	map = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+	if ((long) map == -1) {
+		perror("mmap");
+		close(fd);
+		return;
+	}
+
+	LOGD("st.st_size:%d\n",st.st_size);
+	memcpy(memory, map, st.st_size);
+
+	munmap(map, st.st_size);
+	close(fd);
+
+}
+
+int main(int argc, const char **argv)
+{
+	if(argc != 2 )
+		return 1;
+
+	read_file(argv[1]);
 	eval();
-	for (int i = 0; i < 10; i++)
-	{
-		printf("%d ", M32(i * 4));
-	}
-
-	printf("\n ");
-}
-
-int main()
-{
     return 0;
 }

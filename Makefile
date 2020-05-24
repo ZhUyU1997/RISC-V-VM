@@ -6,3 +6,5 @@ X_LIBS		+= m
 
 SRC			+= main.c
 NAME		:= vm
+
+MODULE		+= test
