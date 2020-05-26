@@ -9,7 +9,8 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define LOGD(...)
+int debug_switch = 0;
+#define LOGD(...) (debug_switch ? printf(__VA_ARGS__) : 1)
 #define LOGI(...) printf(__VA_ARGS__)
 
 #define PSEUDO_INSTRUCTIONS
@@ -30,7 +31,7 @@ typedef signed short s16_t;
 typedef signed char s8_t;
 typedef u32_t reg_t;
 
-u8_t memory[1024*4];
+u8_t memory[1024 * 256];
 u32_t *CSRs;
 u32_t pc = 0, x[33]; // virtual machine registers
 
@@ -448,7 +449,8 @@ void eval()
 	for (;;)
 	{
 		u32_t ins;
-JUMP:	ins = M32(pc);
+	JUMP:
+		ins = M32(pc);
 		LOGD("PC=%08x INS=%08X\n", pc, ins);
 		switch (OPCODE(ins))
 		{
@@ -469,7 +471,7 @@ JUMP:	ins = M32(pc);
 			reg_t rd = GET(ins, 7, 5);
 			X(rd) = pc + 4;
 			pc += GET_J_IMM(ins);
-			LOGD("jal %08X X[%d]=%d offset=%08X\n", pc,rd,x[rd],GET_J_IMM(ins));
+			LOGD("jal %08X X[%d]=%d offset=%08X\n", pc, rd, x[rd], GET_J_IMM(ins));
 			goto JUMP;
 			break;
 		}
@@ -503,7 +505,7 @@ JUMP:	ins = M32(pc);
 			}
 			case 0b001: //bne
 			{
-				LOGD("bne offset=%08X, x[%d]=%d, x[%d]=%d\n", offset, rs1,(x[rs1]), rs2,(x[rs2]));
+				LOGD("bne offset=%08X, x[%d]=%d, x[%d]=%d\n", offset, rs1, (x[rs1]), rs2, (x[rs2]));
 				if (x[rs1] != x[rs2])
 				{
 					pc += offset;
@@ -564,31 +566,31 @@ JUMP:	ins = M32(pc);
 			{
 			case 0b000: //lb
 			{
-				LOGD("x%d=s8[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset,(s8_t)(M(x[rs1] + offset)));
+				LOGD("x%d=s8[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, (s8_t)(M(x[rs1] + offset)));
 				X(rd) = (s8_t)(M(x[rs1] + offset));
 				break;
 			}
 			case 0b001: //lh
 			{
-				LOGD("x%d=s16[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset,(s16_t)(M(x[rs1] + offset)));
+				LOGD("x%d=s16[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, (s16_t)(M(x[rs1] + offset)));
 				X(rd) = (s16_t)(M(x[rs1] + offset));
 				break;
 			}
 			case 0b010: //lw
 			{
-				LOGD("x%d=s32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset,(s32_t)(M(x[rs1] + offset)));
+				LOGD("x%d=s32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, (s32_t)(M(x[rs1] + offset)));
 				X(rd) = (s32_t)(M(x[rs1] + offset));
 				break;
 			}
 			case 0b100: //lbu
 			{
-				LOGD("x%d=s32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset,(s32_t)(M(x[rs1] + offset)));
+				LOGD("x%d=s32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, (s32_t)(M(x[rs1] + offset)));
 				X(rd) = (u8_t)(M(x[rs1] + offset));
 				break;
 			}
 			case 0b101: //lhu
 			{
-				LOGD("x%d=u32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset,(u32_t)(M(x[rs1] + offset)));
+				LOGD("x%d=u32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, (u32_t)(M(x[rs1] + offset)));
 				X(rd) = (u16_t)(M(x[rs1] + offset));
 				break;
 			}
@@ -607,25 +609,27 @@ JUMP:	ins = M32(pc);
 			{
 			case 0b000: //sb
 			{
-				LOGD("8[x%d(%u) + (%d)] = x%d(%u)\n",rs1, x[rs1], offset, rs2, x[rs2]);
+				LOGD("8[x%d(%u) + (%d)] = x%d(%u)\n", rs1, x[rs1], offset, rs2, x[rs2]);
 
 				M8(x[rs1] + offset) = (u8_t)(x[rs2]);
 				break;
 			}
 			case 0b001: //sh
 			{
-				LOGD("16[x%d(%u) + (%d)] = x%d(%u)\n",rs1, x[rs1], offset, rs2, x[rs2]);
+				LOGD("16[x%d(%u) + (%d)] = x%d(%u)\n", rs1, x[rs1], offset, rs2, x[rs2]);
 
 				M16(x[rs1] + offset) = (u16_t)(x[rs2]);
 				break;
 			}
 			case 0b010: //sw
 			{
-				LOGD("32[x%d(%u) + offset(%d)] = x%d(%u)\n",rs1, x[rs1], offset, rs2, x[rs2]);
-				if(x[rs1] + offset == 0xffffffff)
+				LOGD("32[x%d(%u) + offset(%d)] = x%d(%u)\n", rs1, x[rs1], offset, rs2, x[rs2]);
+				if (x[rs1] + offset == 0xffffffff)
 					exit(0);
-				else if(x[rs1] + offset == 0xfffffffe)
-					LOGI("%c",(u32_t)(x[rs2])&0xff);
+				else if (x[rs1] + offset == 0xfffffffe)
+					LOGI("%c", (u32_t)(x[rs2]) & 0xff);
+				else if (x[rs1] + offset == 0xfffffff0)
+					debug_switch = x[rs2];
 				else
 					M32(x[rs1] + offset) = (u32_t)(x[rs2]);
 				break;
@@ -645,7 +649,7 @@ JUMP:	ins = M32(pc);
 			{
 			case 0b000: //addi
 			{
-				LOGD("x%d=x%d(%u)+imm(%d)\n",rd,rs1,x[rs1],imm);
+				LOGD("x%d=x%d(%u)+imm(%d)\n", rd, rs1, x[rs1], imm);
 				X(rd) = x[rs1] + imm;
 				break;
 			}
@@ -771,7 +775,6 @@ JUMP:	ins = M32(pc);
 					break;
 				}
 			}
-
 
 #ifdef RV32M
 
@@ -948,9 +951,10 @@ JUMP:	ins = M32(pc);
 				F64U(rd) = M64(x[rs1] + offset);
 				break;
 			}
-			//FLW
-			break;
+			default:
+				break;
 			}
+			break;
 		}
 		case 0b0100111: //S
 		{
@@ -970,8 +974,10 @@ JUMP:	ins = M32(pc);
 				M64(x[rs1] + offset) = F64U(rs2);
 				break;
 			}
-			break;
+			default:
+				break;
 			}
+			break;
 		}
 		case 0b1000011: //R
 		{
@@ -993,8 +999,10 @@ JUMP:	ins = M32(pc);
 				F64(rd) = F64(rs1) * F64(rs2) + F64(rs3);
 				break;
 			}
-			break;
+			default:
+				break;
 			}
+			break;
 		}
 		case 0b1000111: //R
 		{
@@ -1016,8 +1024,10 @@ JUMP:	ins = M32(pc);
 				F64(rd) = F64(rs1) * F64(rs2) - F64(rs3);
 				break;
 			}
-			break;
+			default:
+				break;
 			}
+			break;
 		}
 		case 0b1001011: //R
 		{
@@ -1038,8 +1048,10 @@ JUMP:	ins = M32(pc);
 				F64(rd) = -F64(rs1) * F64(rs2) + F64(rs3);
 				break;
 			}
-			break;
+			default:
+				break;
 			}
+			break;
 		}
 		case 0b1001111: //R
 		{
@@ -1060,8 +1072,10 @@ JUMP:	ins = M32(pc);
 				F64(rd) = -F64(rs1) * F64(rs2) - F64(rs3);
 				break;
 			}
-			break;
+			default:
+				break;
 			}
+			break;
 		}
 		case 0b1010011: //R
 		{
@@ -1504,38 +1518,40 @@ static void read_file(const char *filename)
 	void *map;
 
 	fd = open(filename, O_RDONLY);
-	if (fd < 0) {
+	if (fd < 0)
+	{
 		fprintf(stderr, "error opening file: ");
 		perror(filename);
 		exit(2);
 	}
 	fstat(fd, &st);
-	if (st.st_size == 0) {
+	if (st.st_size == 0)
+	{
 		close(fd);
 		return;
 	}
 
 	map = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-	if ((long) map == -1) {
+	if ((long)map == -1)
+	{
 		perror("mmap");
 		close(fd);
 		return;
 	}
 
-	LOGD("st.st_size:%d\n",st.st_size);
+	LOGD("st.st_size:%d\n", st.st_size);
 	memcpy(memory, map, st.st_size);
 
 	munmap(map, st.st_size);
 	close(fd);
-
 }
 
 int main(int argc, const char **argv)
 {
-	if(argc != 2 )
+	if (argc != 2)
 		return 1;
 
 	read_file(argv[1]);
 	eval();
-    return 0;
+	return 0;
 }
