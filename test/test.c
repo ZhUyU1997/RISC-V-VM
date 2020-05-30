@@ -335,7 +335,7 @@ static void test_array() {
 static void test_string() {
     char s[] = "abc";
     expect_string(S("abc"), s);
-    char t[] = { S("def") };
+    char t[] = { "def" };
     expect_string(S("def"), t);
 }
 

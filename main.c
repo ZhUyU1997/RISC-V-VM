@@ -19,6 +19,11 @@ int debug_switch = 0;
 #define RV32F
 #define RV32D
 #define RV32A
+#define RV64I
+#define RV64M
+#define RV64A
+#define RV64F
+#define RV64D
 
 typedef unsigned long long u64_t;
 typedef long long s64_t;
@@ -30,6 +35,7 @@ typedef signed int s32_t;
 typedef signed short s16_t;
 typedef signed char s8_t;
 typedef u32_t reg_t;
+typedef u32_t imm_t;
 
 u8_t memory[1024 * 256];
 u32_t *CSRs;
@@ -244,11 +250,11 @@ enum
 
 #define GET_EXT(ins, width) UNSIGNED(SIGNED(GET_FIXED((ins), 31, 1)) >> ((width)-1))
 
-#define GET_I_IMM(ins) (GET_EXT((ins), 21) | GET_FIXED_R((ins), 25, 6, 5) | GET_FIXED_R((ins), 21, 4, 1) | GET_FIXED_R((ins), 20, 1, 0))
-#define GET_S_IMM(ins) (GET_EXT((ins), 21) | GET_FIXED_R((ins), 25, 6, 5) | GET_FIXED_R((ins), 8, 4, 1) | GET_FIXED_R((ins), 7, 1, 0))
-#define GET_B_IMM(ins) (GET_EXT((ins), 20) | GET_FIXED_L((ins), 7, 1, 11) | GET_FIXED_R((ins), 25, 6, 5) | GET_FIXED_R((ins), 8, 4, 1))
-#define GET_U_IMM(ins) (GET_FIXED((ins), 12, 20))
-#define GET_J_IMM(ins) (GET_EXT(ins, 12) | GET_FIXED((ins), 12, 8) | GET_FIXED_R((ins), 20, 1, 11) | GET_FIXED_R((ins), 25, 6, 5) | GET_FIXED_R((ins), 21, 4, 1))
+#define GET_I_IMM(ins) ((s32_t)(GET_EXT((ins), 21) | GET_FIXED_R((ins), 25, 6, 5) | GET_FIXED_R((ins), 21, 4, 1) | GET_FIXED_R((ins), 20, 1, 0)))
+#define GET_S_IMM(ins) ((s32_t)(GET_EXT((ins), 21) | GET_FIXED_R((ins), 25, 6, 5) | GET_FIXED_R((ins), 8, 4, 1) | GET_FIXED_R((ins), 7, 1, 0)))
+#define GET_B_IMM(ins) ((s32_t)(GET_EXT((ins), 20) | GET_FIXED_L((ins), 7, 1, 11) | GET_FIXED_R((ins), 25, 6, 5) | GET_FIXED_R((ins), 8, 4, 1)))
+#define GET_U_IMM(ins) ((s32_t)(GET_FIXED((ins), 12, 20)))
+#define GET_J_IMM(ins) ((s32_t)(GET_EXT(ins, 12) | GET_FIXED((ins), 12, 8) | GET_FIXED_R((ins), 20, 1, 11) | GET_FIXED_R((ins), 25, 6, 5) | GET_FIXED_R((ins), 21, 4, 1)))
 
 #define GET_I_INS(imm) (GET_FIXED_L((imm), 0, 12, 20))
 #define GET_S_INS(imm) (GET_FIXED_L((imm), 5, 7, 25) | GET_FIXED_L((imm), 0, 5, 7))
@@ -454,19 +460,19 @@ void eval()
 		LOGD("PC=%08x INS=%08X\n", pc, ins);
 		switch (OPCODE(ins))
 		{
-		case 0b0110111: //U lui
+		case 0b0110111: //[U] LUI
 		{
 			reg_t rd = GET(ins, 7, 5);
 			X(rd) = GET_U_IMM(ins);
 			break;
 		}
-		case 0b0010111: //U auipc
+		case 0b0010111: //[U] [AUIPC]
 		{
 			reg_t rd = GET(ins, 7, 5);
 			X(rd) = pc + GET_U_IMM(ins);
 			break;
 		}
-		case 0b1101111: //J jal
+		case 0b1101111: //[J] [JAL]
 		{
 			reg_t rd = GET(ins, 7, 5);
 			X(rd) = pc + 4;
@@ -475,26 +481,26 @@ void eval()
 			goto JUMP;
 			break;
 		}
-		case 0b1100111: //I jalr
+		case 0b1100111: //[I] [JALR]
 		{
 			reg_t rd = GET(ins, 7, 5);
 			reg_t rs1 = GET(ins, 15, 5);
 			u32_t t = pc + 4;
-			u32_t offset = GET_I_IMM(ins);
+			imm_t offset = GET_I_IMM(ins);
 			pc = (x[rs1] + offset) & ~1;
 			X(rd) = t;
 			goto JUMP;
 			break;
 		}
-		case 0b1100011: //B
+		case 0b1100011: //[B]
 		{
 			int funct3 = GET(ins, 12, 3);
 			reg_t rs1 = GET(ins, 15, 5);
 			reg_t rs2 = GET(ins, 20, 5);
-			u32_t offset = GET_B_IMM(ins);
+			imm_t offset = GET_B_IMM(ins);
 			switch (funct3)
 			{
-			case 0b000: //beq
+			case 0b000: //[BEQ]
 			{
 				if (x[rs1] == x[rs2])
 				{
@@ -503,7 +509,7 @@ void eval()
 				}
 				break;
 			}
-			case 0b001: //bne
+			case 0b001: //[BNE]
 			{
 				LOGD("bne offset=%08X, x[%d]=%d, x[%d]=%d\n", offset, rs1, (x[rs1]), rs2, (x[rs2]));
 				if (x[rs1] != x[rs2])
@@ -513,7 +519,7 @@ void eval()
 				}
 				break;
 			}
-			case 0b100: //blt
+			case 0b100: //[BLT]
 			{
 				if (SIGNED(x[rs1]) < SIGNED(x[rs2]))
 				{
@@ -522,7 +528,7 @@ void eval()
 				}
 				break;
 			}
-			case 0b101: //bge
+			case 0b101: //[BGE]
 			{
 				// LOGD("bge offset=%08X, x[%d]=%d, x[%d]=%d\n", offset, rs1,SIGNED(x[rs1]), rs2,SIGNED(x[rs2]));
 				if (SIGNED(x[rs1]) >= SIGNED(x[rs2]))
@@ -532,7 +538,7 @@ void eval()
 				}
 				break;
 			}
-			case 0b110: //bltu
+			case 0b110: //[BLTU]
 			{
 				// LOGD("bltu offset=%08X, x[%d]=%u x[%d]=%u\n", offset, rs1,UNSIGNED(x[rs1]), rs2,UNSIGNED(x[rs2]));
 				if (UNSIGNED(x[rs1]) < UNSIGNED(x[rs2]))
@@ -542,7 +548,7 @@ void eval()
 				}
 				break;
 			}
-			case 0b111: //bgeu
+			case 0b111: //[BGEU]
 			{
 				if (UNSIGNED(x[rs1]) >= UNSIGNED(x[rs2]))
 				{
@@ -556,72 +562,86 @@ void eval()
 			}
 			break;
 		}
-		case 0b0000011: //I
+		case 0b0000011: //[I]
 		{
 			int funct3 = GET(ins, 12, 3);
 			reg_t rs1 = GET(ins, 15, 5);
-			u32_t offset = GET_I_IMM(ins);
+			imm_t offset = GET_I_IMM(ins);
 			reg_t rd = GET(ins, 7, 5);
 			switch (funct3)
 			{
-			case 0b000: //lb
+			case 0b000: //[LB]
 			{
 				LOGD("x%d=s8[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, (s8_t)(M(x[rs1] + offset)));
-				X(rd) = (s8_t)(M(x[rs1] + offset));
+				X(rd) = (s8_t)(M8(x[rs1] + offset));
 				break;
 			}
-			case 0b001: //lh
+			case 0b001: //[LH]
 			{
 				LOGD("x%d=s16[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, (s16_t)(M(x[rs1] + offset)));
-				X(rd) = (s16_t)(M(x[rs1] + offset));
+				X(rd) = (s16_t)(M16(x[rs1] + offset));
 				break;
 			}
-			case 0b010: //lw
+			case 0b010: //[LW]
 			{
 				LOGD("x%d=s32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, (s32_t)(M(x[rs1] + offset)));
-				X(rd) = (s32_t)(M(x[rs1] + offset));
+				X(rd) = (s32_t)(M32(x[rs1] + offset));
 				break;
 			}
-			case 0b100: //lbu
+			case 0b100: //[LBU]
 			{
-				LOGD("x%d=s32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, (s32_t)(M(x[rs1] + offset)));
-				X(rd) = (u8_t)(M(x[rs1] + offset));
+				LOGD("x%d=u8[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, (u8_t)(M(x[rs1] + offset)));
+				X(rd) = M8(x[rs1] + offset);
 				break;
 			}
-			case 0b101: //lhu
+			case 0b101: //[LHU]
+			{
+				LOGD("x%d=u16[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, (u16_t)(M(x[rs1] + offset)));
+				X(rd) = M16(x[rs1] + offset);
+				break;
+			}
+#ifdef RV64I
+			case 0b110: //[LWU]
 			{
 				LOGD("x%d=u32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, (u32_t)(M(x[rs1] + offset)));
-				X(rd) = (u16_t)(M(x[rs1] + offset));
+				X(rd) = M32(x[rs1] + offset);
 				break;
 			}
+			case 0b011: //[LD]
+			{
+				LOGD("x%d=s64[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, (s64_t)(M(x[rs1] + offset)));
+				X(rd) = (s64_t)(M64(x[rs1] + offset));
+				break;
+			}
+#endif
 			default:
 				break;
 			}
 			break;
 		}
-		case 0b0100011: //S
+		case 0b0100011: //[S]
 		{
 			int funct3 = GET(ins, 12, 3);
 			reg_t rs1 = GET(ins, 15, 5);
 			reg_t rs2 = GET(ins, 20, 5);
-			u32_t offset = GET_S_IMM(ins);
+			imm_t offset = GET_S_IMM(ins);
 			switch (funct3)
 			{
-			case 0b000: //sb
+			case 0b000: //[SB]
 			{
 				LOGD("8[x%d(%u) + (%d)] = x%d(%u)\n", rs1, x[rs1], offset, rs2, x[rs2]);
 
 				M8(x[rs1] + offset) = (u8_t)(x[rs2]);
 				break;
 			}
-			case 0b001: //sh
+			case 0b001: //[SH]
 			{
 				LOGD("16[x%d(%u) + (%d)] = x%d(%u)\n", rs1, x[rs1], offset, rs2, x[rs2]);
 
 				M16(x[rs1] + offset) = (u16_t)(x[rs2]);
 				break;
 			}
-			case 0b010: //sw
+			case 0b010: //[SW]
 			{
 				LOGD("32[x%d(%u) + offset(%d)] = x%d(%u)\n", rs1, x[rs1], offset, rs2, x[rs2]);
 				if (x[rs1] + offset == 0xffffffff)
@@ -634,53 +654,68 @@ void eval()
 					M32(x[rs1] + offset) = (u32_t)(x[rs2]);
 				break;
 			}
+#ifdef RV64I
+			case 0b011: //[SD]
+			{
+				LOGD("64[x%d(%u) + offset(%d)] = x%d(%u)\n", rs1, x[rs1], offset, rs2, x[rs2]);
+				M64(x[rs1] + offset) = (u64_t)(x[rs2]);
+				break;
+			}
+#endif
 			default:
 				break;
 			}
 			break;
 		}
-		case 0b0010011: //I
+		case 0b0010011: //[I]
 		{
 			int funct3 = GET(ins, 12, 3);
 			reg_t rs1 = GET(ins, 15, 5);
-			u32_t imm = GET_I_IMM(ins);
+			imm_t imm = GET_I_IMM(ins);
 			reg_t rd = GET(ins, 7, 5);
 			switch (funct3)
 			{
-			case 0b000: //addi
+			case 0b000: //[ADDI]
 			{
 				LOGD("x%d=x%d(%u)+imm(%d)\n", rd, rs1, x[rs1], imm);
 				X(rd) = x[rs1] + imm;
 				break;
 			}
-			case 0b010: //slti
+			case 0b010: //[SLTI]
 			{
 				X(rd) = (SIGNED(x[rs1]) < SIGNED(imm));
 				break;
 			}
-			case 0b011: //sltiu
+			case 0b011: //[SLTIU]
 			{
 				X(rd) = (UNSIGNED(x[rs1]) < UNSIGNED(imm));
 				break;
 			}
-			case 0b100: //xori
+			case 0b100: //[XORI]
 			{
 				X(rd) = (x[rs1] ^ imm);
 				break;
 			}
-			case 0b110: //ori
+			case 0b110: //[ORI]
 			{
 				X(rd) = (x[rs1] | imm);
 				break;
 			}
-			case 0b111: //andi
+			case 0b111: //[ANDI]
 			{
 				X(rd) = (x[rs1] & imm);
 				break;
 			}
-			case 0b001: //slli (Shift Left Logical Immediate)
+			case 0b001: //[SLLI] (Shift Left Logical Immediate)
 			{
+
 				int shamt = GET(ins, 20, 5);
+#if !defined(RV64I) && defined(RV32I)
+				if (GET(shamt, 5, 1))
+				{
+					//TODO: 仅当shamt[5]=0时，指令才是有效的
+				}
+#endif
 				X(rd) = (UNSIGNED(x[rs1]) << imm);
 				break;
 			}
@@ -688,11 +723,17 @@ void eval()
 			{
 				int funct7 = GET(ins, 25, 7);
 				int shamt = GET(ins, 20, 5);
-				if (funct7 == 0b0000000) //srli (Shift Right Logical Immediate)
+#if !defined(RV64I) && defined(RV32I)
+				if (GET(shamt, 5, 1))
+				{
+					//TODO: 仅当shamt[5]=0时，指令才是有效的
+				}
+#endif
+				if (funct7 == 0b0000000) //[SRLI] (Shift Right Logical Immediate)
 				{
 					X(rd) = (UNSIGNED(x[rs1]) >> shamt);
 				}
-				else if (funct7 == 0b0100000) //srai (Shift Right Arithmetic Immediate)
+				else if (funct7 == 0b0100000) //[SRAI] (Shift Right Arithmetic Immediate)
 				{
 					X(rd) = (SIGNED(x[rs1]) >> shamt);
 				}
@@ -703,7 +744,69 @@ void eval()
 			}
 			break;
 		}
-		case 0b0110011: //R
+#ifdef RV64I
+		case 0b0011011:
+		{
+			reg_t rd = GET(ins, 7, 5);
+			reg_t rs1 = GET(ins, 15, 5);
+
+			int funct3 = GET(ins, 12, 3);
+			switch (funct3)
+			{
+			case 0b000: //[I] [ADDIW]
+			{
+				imm_t imm = GET_I_IMM(ins);
+				X(rd) = (s32_t)(x[rs1] + imm);
+				break;
+			}
+			case 0b001: //[R] [SLLIW]
+			{
+				reg_t shamt = GET(ins, 20, 6);
+
+				if (GET(shamt, 5, 1))
+				{
+					//仅当 shamt[5]=0 时指令有效
+					break;
+				}
+				X(rd) = (s32_t)(x[rs1] << shamt);
+				break;
+			}
+			case 0b101: //[R]
+			{
+				reg_t shamt = GET(ins, 20, 6);
+				int funct3 = GET(ins, 26, 6);
+				if (GET(shamt, 5, 1))
+				{
+					//仅当 shamt[5]=0 时指令有效
+					break;
+				}
+
+				switch (funct3)
+				{
+				case 0b010000: //[SRAIW]
+				{
+					X(rd) = (s32_t)((s32_t)(x[rs1]) >> shamt);
+
+					break;
+				}
+				case 0b000000: //[SRLIW]
+				{
+					X(rd) = (s32_t)((u32_t)(x[rs1]) >> shamt);
+
+					break;
+				}
+				default:
+					break;
+				}
+				break;
+			}
+			default:
+				break;
+			}
+			break;
+		}
+#endif
+		case 0b0110011: //[R]
 		{
 			int funct3 = GET(ins, 12, 3);
 			int funct7 = GET(ins, 25, 7);
@@ -718,54 +821,54 @@ void eval()
 				{
 				case 0b000:
 				{
-					if (funct7 == 0b0000000) //add
+					if (funct7 == 0b0000000) //[ADD]
 					{
 						X(rd) = x[rs1] + x[rs2];
 					}
-					else if (funct7 == 0b0100000) //sub
+					else if (funct7 == 0b0100000) //[SUB]
 					{
 						X(rd) = x[rs1] - x[rs2];
 					}
 					break;
 				}
-				case 0b001: //sll
+				case 0b001: //[SLL]
 				{
 					X(rd) = UNSIGNED(x[rs1]) << SIGNED(x[rs2]);
 					break;
 				}
-				case 0b010: //slt
+				case 0b010: //[SLT]
 				{
 					X(rd) = SIGNED(x[rs1]) < SIGNED(x[rs2]);
 					break;
 				}
-				case 0b011: //sltu
+				case 0b011: //[SLTU]
 				{
 					X(rd) = UNSIGNED(x[rs1]) < UNSIGNED(x[rs2]);
 					break;
 				}
-				case 0b100: //xor
+				case 0b100: //[XOR]
 				{
 					X(rd) = x[rs1] ^ x[rs2];
 					break;
 				}
 				case 0b101:
 				{
-					if (funct7 == 0b0000000) //srl
+					if (funct7 == 0b0000000) //[SRL]
 					{
 						X(rd) = (UNSIGNED(x[rs1]) >> x[rs2]);
 					}
-					else if (funct7 == 0b0100000) //sra (Shift Right Arithmetic)
+					else if (funct7 == 0b0100000) //[SRA] (Shift Right Arithmetic)
 					{
 						X(rd) = (SIGNED(x[rs1]) >> x[rs2]);
 					}
 					break;
 				}
-				case 0b110: //or
+				case 0b110: //[OR]
 				{
 					X(rd) = x[rs1] | x[rs2];
 					break;
 				}
-				case 0b111: //and
+				case 0b111: //[AND]
 				{
 					X(rd) = x[rs1] & x[rs2];
 					break;
@@ -785,45 +888,45 @@ void eval()
 				reg_t rd = GET(ins, 7, 5);
 				switch (funct3)
 				{
-				case 0b000: //mul
+				case 0b000: //[MUL]
 				{
 					X(rd) = x[rs1] * x[rs2];
 					break;
 				}
-				case 0b001: //mulh
+				case 0b001: //[MULH]
 				{
 					s64_t t = SIGNED(x[rs1]) * SIGNED(x[rs2]);
 					X(rd) = t >> 32;
 					break;
 				}
-				case 0b010: //mulhsu
+				case 0b010: //[MULHSU]
 				{
 					u64_t t = SIGNED(x[rs1]) * UNSIGNED(x[rs2]);
 					X(rd) = t >> 32;
 					break;
 				}
-				case 0b011: //mulhu
+				case 0b011: //[MULHU]
 				{
 					u64_t t = UNSIGNED(x[rs1]) * UNSIGNED(x[rs2]);
 					X(rd) = t >> 32;
 					break;
 				}
-				case 0b100: //div
+				case 0b100: //[DIV]
 				{
 					X(rd) = SIGNED(x[rs1]) / SIGNED(x[rs2]);
 					break;
 				}
-				case 0b101: //divu
+				case 0b101: //[DIVU]
 				{
 					X(rd) = UNSIGNED(x[rs1]) / UNSIGNED(x[rs2]);
 					break;
 				}
-				case 0b110: //rem
+				case 0b110: //[REM]
 				{
 					X(rd) = SIGNED(x[rs1]) % SIGNED(x[rs2]);
 					break;
 				}
-				case 0b111: //remu
+				case 0b111: //[REMU]
 				{
 					X(rd) = UNSIGNED(x[rs1]) % UNSIGNED(x[rs2]);
 					break;
@@ -835,16 +938,99 @@ void eval()
 #endif
 			break;
 		}
-		case 0b0001111: //I
+		case 0b0111011: //[R]
+		{
+			int funct3 = GET(ins, 12, 3);
+			int funct7 = GET(ins, 25, 7);
+
+			reg_t rs1 = GET(ins, 15, 5);
+			reg_t rs2 = GET(ins, 20, 5);
+			reg_t rd = GET(ins, 7, 5);
+			switch (funct3)
+			{
+			case 0b000:
+			{
+				switch (funct7)
+				{
+				case 0b0000000: //[ADDW]
+				{
+					X(rd) = (s32_t)(x[rs1] + x[rs2]);
+					break;
+				}
+				case 0b0100000: //[SUBW]
+				{
+					X(rd) = (s32_t)(x[rs1] - x[rs2]);
+					break;
+				}
+				case 0b0000001: //[MULW]
+				{
+					X(rd) = (s32_t)(x[rs1] * x[rs2]);
+					break;
+				}
+				default:
+					break;
+				}
+				break;
+			}
+			case 0b001: //[SLLW]
+			{
+				X(rd) = (s32_t)((x[rs1] << GET(x[rs2], 0, 5)));
+				break;
+			}
+			case 0b101:
+			{
+				switch (funct7)
+				{
+				case 0b0000000: //[SRLW]
+				{
+					X(rd) = (s32_t)((((u32_t)x[rs1]) >> GET(x[rs2], 0, 5)));
+					break;
+				}
+				case 0b0100000: //[SRAW]
+				{
+					X(rd) = (s32_t)((((s32_t)x[rs1]) >> GET(x[rs2], 0, 5)));
+					break;
+				}
+				case 0b0000001: //[DIVUW]
+				{
+					X(rd) = (s32_t)(((u32_t)x[rs1]) / ((u32_t)x[rs2]));
+					break;
+				}
+				default:
+					break;
+				}
+				break;
+			}
+			case 0b100: //[DIVW]
+			{
+				X(rd) = (s32_t)(((s32_t)x[rs1]) / ((s32_t)x[rs2]));
+				break;
+			}
+			case 0b110: //[REMW]
+			{
+				X(rd) = (s32_t)(((s32_t)x[rs1]) % ((s32_t)x[rs2]));
+				break;
+			}
+			case 0b111: //[REMUW]
+			{
+				X(rd) = (s32_t)(((u32_t)x[rs1]) % ((u32_t)x[rs2]));
+				break;
+			}
+			default:
+				break;
+			}
+			break;
+		}
+		case 0b0001111: //[I]
 		{
 			int funct3 = GET(ins, 12, 3);
 			switch (funct3)
 			{
-			case 0b000: //fence
+			case 0b000: //[FENCE]
 			{
 				break;
 			}
-			case 0b001: //fence.i
+			case 0b001: //[FENCE.I]
 			{
 				break;
 			}
@@ -853,12 +1039,12 @@ void eval()
 			}
 			break;
 		}
-		case 0b1110011: //I
+		case 0b1110011: //[I]
 		{
 			int funct3 = GET(ins, 12, 3);
 			reg_t rs1 = GET(ins, 15, 5);
 			reg_t rs2 = GET(ins, 20, 5);
-			u32_t offset = GET_I_IMM(ins);
+			imm_t offset = GET_I_IMM(ins);
 			reg_t rd = GET(ins, 7, 5);
 			u32_t csr = GET(ins, 20, 12);
 			switch (funct3)
@@ -866,43 +1052,43 @@ void eval()
 			case 0b000:
 			{
 				int funct7 = GET(ins, 25, 7);
-				if (funct7 == 0b0000000) //ecall (Environment Call)
+				if (funct7 == 0b0000000) //[ECALL] (Environment Call)
 				{
 				}
-				else if (funct7 == 0b0100000) //ebreak (Environment Breakpoint)
+				else if (funct7 == 0b0100000) //[EBREAK] (Environment Breakpoint)
 				{
 				}
 				break;
 			}
-			case 0b001: //csrrw (Control and Status Register Read and Write)
+			case 0b001: //[CSRRW] (Control and Status Register Read and Write)
 			{
 				u32_t t = CSRs[csr];
 				CSRs[csr] = x[rs1];
 				X(rd) = t;
 				break;
 			}
-			case 0b010: //csrrs (Control and Status Register Read and Set)
+			case 0b010: //[CSRRS] (Control and Status Register Read and Set)
 			{
 				u32_t t = CSRs[csr];
 				CSRs[csr] = t | x[rs1];
 				X(rd) = t;
 				break;
 			}
-			case 0b011: //csrrc (Control and Status Register Read and Clear)
+			case 0b011: //[CSRRC] (Control and Status Register Read and Clear)
 			{
 				u32_t t = CSRs[csr];
 				CSRs[csr] = t & (~x[rs1]);
 				X(rd) = t;
 				break;
 			}
-			case 0b101: //csrrwi (Control and Status Register Read and Write Immediate)
+			case 0b101: //[CSRRWI] (Control and Status Register Read and Write Immediate)
 			{
 				u32_t zimm = GET(ins, 15, 5);
 				X(rd) = CSRs[csr];
 				CSRs[csr] = zimm;
 				break;
 			}
-			case 0b110: //csrrsi
+			case 0b110: //[CSRRSI]
 			{
 				u32_t zimm = GET(ins, 15, 5);
 				u32_t t = CSRs[csr];
@@ -910,7 +1096,7 @@ void eval()
 				X(rd) = t;
 				break;
 			}
-			case 0b111: //csrrci
+			case 0b111: //[CSRRCI]
 			{
 				u32_t zimm = GET(ins, 15, 5);
 				u32_t t = CSRs[csr];
@@ -923,7 +1109,7 @@ void eval()
 			}
 			break;
 		}
-		case 0b0000001: //debug
+		case 0b0000001: //[DEBUG]
 		{
 			reg_t rd = GET(ins, 7, 5);
 			int funct3 = GET(ins, 12, 3);
@@ -932,21 +1118,21 @@ void eval()
 			break;
 		}
 #if defined(RV32F) || defined(RV32D)
-		case 0b0000111: //I
+		case 0b0000111: //[I]
 		{
 			int funct3 = GET(ins, 12, 3);
-			u32_t offset = GET_I_IMM(ins);
+			imm_t offset = GET_I_IMM(ins);
 			reg_t rs1 = GET(ins, 15, 5);
 			reg_t rd = GET(ins, 7, 5);
 
 			switch (funct3)
 			{
-			case 0b010: //FLW
+			case 0b010: //[FLW]
 			{
 				F32U(rd) = M32(x[rs1] + offset);
 				break;
 			}
-			case 0b011: //FLD
+			case 0b011: //[FLD]
 			{
 				F64U(rd) = M64(x[rs1] + offset);
 				break;
@@ -956,20 +1142,20 @@ void eval()
 			}
 			break;
 		}
-		case 0b0100111: //S
+		case 0b0100111: //[S]
 		{
 			int funct3 = GET(ins, 12, 3);
-			u32_t offset = GET_S_IMM(ins);
+			imm_t offset = GET_S_IMM(ins);
 			reg_t rs1 = GET(ins, 15, 5);
 			reg_t rs2 = GET(ins, 20, 5);
 			switch (funct3)
 			{
-			case 0b010: //FSW
+			case 0b010: //[FSW]
 			{
 				M32(x[rs1] + offset) = F32U(rs2);
 				break;
 			}
-			case 0b011: //FSD
+			case 0b011: //[FSD]
 			{
 				M64(x[rs1] + offset) = F64U(rs2);
 				break;
@@ -979,7 +1165,7 @@ void eval()
 			}
 			break;
 		}
-		case 0b1000011: //R
+		case 0b1000011: //[R]
 		{
 			int funct2 = GET(ins, 25, 2);
 			reg_t rd = GET(ins, 7, 5);
@@ -989,12 +1175,12 @@ void eval()
 
 			switch (funct2)
 			{
-			case 0b00: //FMADD.S
+			case 0b00: //[FMADD.S]
 			{
 				F32(rd) = F32(rs1) * F32(rs2) + F32(rs3);
 				break;
 			}
-			case 0b01: //FMADD.D
+			case 0b01: //[FMADD.D]
 			{
 				F64(rd) = F64(rs1) * F64(rs2) + F64(rs3);
 				break;
@@ -1004,7 +1190,7 @@ void eval()
 			}
 			break;
 		}
-		case 0b1000111: //R
+		case 0b1000111: //[R]
 		{
 			int funct2 = GET(ins, 25, 2);
 			reg_t rd = GET(ins, 7, 5);
@@ -1014,12 +1200,12 @@ void eval()
 
 			switch (funct2)
 			{
-			case 0b00: //FMSUB.S
+			case 0b00: //[FMSUB.S]
 			{
 				F32(rd) = F32(rs1) * F32(rs2) - F32(rs3);
 				break;
 			}
-			case 0b01: //FMSUB.D
+			case 0b01: //[FMSUB.D]
 			{
 				F64(rd) = F64(rs1) * F64(rs2) - F64(rs3);
 				break;
@@ -1029,7 +1215,7 @@ void eval()
 			}
 			break;
 		}
-		case 0b1001011: //R
+		case 0b1001011: //[R]
 		{
 			int funct2 = GET(ins, 25, 2);
 			reg_t rd = GET(ins, 7, 5);
@@ -1038,12 +1224,12 @@ void eval()
 			reg_t rs3 = GET(ins, 27, 5);
 			switch (funct2)
 			{
-			case 0b00: //FNMSUB.S
+			case 0b00: //[FNMSUB.S]
 			{
 				F32(rd) = -F32(rs1) * F32(rs2) + F32(rs3);
 				break;
 			}
-			case 0b01: //FNMSUB.D
+			case 0b01: //[FNMSUB.D]
 			{
 				F64(rd) = -F64(rs1) * F64(rs2) + F64(rs3);
 				break;
@@ -1053,7 +1239,7 @@ void eval()
 			}
 			break;
 		}
-		case 0b1001111: //R
+		case 0b1001111: //[R]
 		{
 			int funct2 = GET(ins, 25, 2);
 			reg_t rd = GET(ins, 7, 5);
@@ -1062,12 +1248,12 @@ void eval()
 			reg_t rs3 = GET(ins, 27, 5);
 			switch (funct2)
 			{
-			case 0b00: //FNMADD.S
+			case 0b00: //[FNMADD.S]
 			{
 				F32(rd) = -F32(rs1) * F32(rs2) - F32(rs3);
 				break;
 			}
-			case 0b01: //FNMADD.D
+			case 0b01: //[FNMADD.D]
 			{
 				F64(rd) = -F64(rs1) * F64(rs2) - F64(rs3);
 				break;
@@ -1077,7 +1263,7 @@ void eval()
 			}
 			break;
 		}
-		case 0b1010011: //R
+		case 0b1010011: //[R]
 		{
 			int funct7 = GET(ins, 25, 7);
 			int funct5 = GET(ins, 20, 5);
@@ -1088,27 +1274,27 @@ void eval()
 			switch (funct7)
 			{
 #ifdef RV32F
-			case 0b0000000: //FADD.S
+			case 0b0000000: //[FADD.S]
 			{
 				F32(rd) = F32(rs1) + F32(rs2);
 				break;
 			}
-			case 0b0000100: //FSUB.S
+			case 0b0000100: //[FSUB.S]
 			{
 				F32(rd) = F32(rs1) - F32(rs2);
 				break;
 			}
-			case 0b0001000: //FMUL.S
+			case 0b0001000: //[FMUL.S]
 			{
 				F32(rd) = F32(rs1) * F32(rs2);
 				break;
 			}
-			case 0b0001100: //FDIV.S
+			case 0b0001100: //[FDIV.S]
 			{
 				F32(rd) = F32(rs1) / F32(rs2);
 				break;
 			}
-			case 0b0101100: //FSQRT.S
+			case 0b0101100: //[FSQRT.S]
 			{
 				F32(rd) = sqrtf(F32(rs1));
 				break;
@@ -1117,17 +1303,17 @@ void eval()
 			{
 				switch (funct3)
 				{
-				case 0b000: //FSGNJ.S
+				case 0b000: //[FSGNJ.S]
 				{
 					F32U(rd) = GET_FIXED(F32U(rs2), 31, 1) | GET_FIXED(F32U(rs1), 0, 31);
 					break;
 				}
-				case 0b001: //FSGNJN.S
+				case 0b001: //[FSGNJN.S]
 				{
 					F32U(rd) = (GET_FIXED(F32U(rs2), 31, 1) ^ (1 << 31)) | GET_FIXED(F32U(rs1), 0, 31);
 					break;
 				}
-				case 0b010: //FSGNJX.S
+				case 0b010: //[FSGNJX.S]
 				{
 					F32U(rd) = (GET_FIXED(F32U(rs1), 31, 1) ^ GET_FIXED(F32U(rs2), 31, 1)) | GET_FIXED(F32U(rs1), 0, 31);
 					break;
@@ -1142,12 +1328,12 @@ void eval()
 			{
 				switch (funct3)
 				{
-				case 0b000: //FMIN.S
+				case 0b000: //[FMIN.S]
 				{
 					F32(rd) = fminf(F32(rs1), F32(rs2));
 					break;
 				}
-				case 0b001: //FMAX.S
+				case 0b001: //[FMAX.S]
 				{
 					F32(rd) = fmaxf(F32(rs1), F32(rs2));
 					break;
@@ -1162,16 +1348,28 @@ void eval()
 			{
 				switch (funct5)
 				{
-				case 0b00000: //FCVT.W.S
+				case 0b00000: //[FCVT.W.S]
 				{
 					X(rd) = SIGNED(F32(rs1));
 					break;
 				}
-				case 0b00001: //FCVT.WU.S
+				case 0b00001: //[FCVT.WU.S]
 				{
-					X(rd) = UNSIGNED(F32(rs1));
+					X(rd) = (s32_t)UNSIGNED(F32(rs1));
 					break;
 				}
+#ifdef RV64F
+				case 0b00010: //[FCVT.L.S]
+				{
+					X(rd) = (s64_t)(F32(rs1));
+					break;
+				}
+				case 0b00011: //[FCVT.LU.S]
+				{
+					X(rd) = (u64_t)(F32(rs1));
+					break;
+				}
+#endif
 				default:
 					break;
 				}
@@ -1181,12 +1379,12 @@ void eval()
 			{
 				switch (funct5)
 				{
-				case 0b00000: //FMV.X.W
+				case 0b00000: //[FMV.X.W]
 				{
 					X(rd) = SIGNED(F32S(rs1));
 					break;
 				}
-				case 0b00001: //FCLASS.S
+				case 0b00001: //[FCLASS.S]
 				{
 					X(rd) = UNSIGNED(1 << classify_float(F32(rs1)));
 					break;
@@ -1201,17 +1399,17 @@ void eval()
 			{
 				switch (funct3)
 				{
-				case 0b000: //FEQ.S
+				case 0b000: //[FEQ.S]
 				{
 					X(rd) = F32(rs1) == F32(rs2);
 					break;
 				}
-				case 0b001: //FLT.S
+				case 0b001: //[FLT.S]
 				{
 					X(rd) = F32(rs1) < F32(rs2);
 					break;
 				}
-				case 0b010: //FLE.S
+				case 0b010: //[FLE.S]
 				{
 					X(rd) = F32(rs1) <= F32(rs2);
 					break;
@@ -1226,50 +1424,61 @@ void eval()
 			{
 				switch (funct5)
 				{
-				case 0b00000: //FCVT.S.W
+				case 0b00000: //[FCVT.S.W]
 				{
 					F32(rd) = SIGNED(x[rs1]);
 					break;
 				}
-				case 0b00001: //FCVT.S.WU
+				case 0b00001: //[FCVT.S.WU]
 				{
 					F32(rd) = UNSIGNED(x[rs1]);
 					break;
 				}
-
+#ifdef RV64F
+				case 0b00010: //[FCVT.S.L]
+				{
+					F32(rd) = (s64_t)(x[rs1]);
+					break;
+				}
+				case 0b00011: //[FCVT.S.LU]
+				{
+					F32(rd) = (u64_t)(x[rs1]);
+					break;
+				}
+#endif
 				default:
 					break;
 				}
 				break;
 			}
-			case 0b1111000: //FMV.W.X
+			case 0b1111000: //[FMV.W.X]
 			{
 				F32U(rd) = x[rs1];
 				break;
 			}
 #endif
 #ifdef RV32D
-			case 0b0000001: //FADD.D
+			case 0b0000001: //[FADD.D]
 			{
 				F64(rd) = F64(rs1) + F64(rs2);
 				break;
 			}
-			case 0b0000101: //FSUB.D
+			case 0b0000101: //[FSUB.D]
 			{
 				F64(rd) = F64(rs1) - F64(rs2);
 				break;
 			}
-			case 0b0001001: //FMUL.D
+			case 0b0001001: //[FMUL.D]
 			{
 				F64(rd) = F64(rs1) * F64(rs2);
 				break;
 			}
-			case 0b0001101: //FDIV.D
+			case 0b0001101: //[FDIV.D]
 			{
 				F64(rd) = F64(rs1) / F64(rs2);
 				break;
 			}
-			case 0b0101101: //FSQRT.D
+			case 0b0101101: //[FSQRT.D]
 			{
 				F64(rd) = sqrt(F64(rs1));
 				break;
@@ -1278,17 +1487,17 @@ void eval()
 			{
 				switch (funct3)
 				{
-				case 0b000: //FSGNJ.D
+				case 0b000: //[FSGNJ.D]
 				{
 					F64U(rd) = GET_FIXED(F64U(rs2), 63, 1) | GET_FIXED(F64U(rs1), 0, 63);
 					break;
 				}
-				case 0b001: //FSGNJN.D
+				case 0b001: //[FSGNJN.D]
 				{
 					F64U(rd) = (GET_FIXED(F64U(rs2), 63, 1) ^ (1 << 63)) | GET_FIXED(F64U(rs1), 0, 63);
 					break;
 				}
-				case 0b010: //FSGNJX.D
+				case 0b010: //[FSGNJX.D]
 				{
 					F64U(rd) = (GET_FIXED(F64U(rs1), 63, 1) ^ GET_FIXED(F64U(rs2), 63, 1)) | GET_FIXED(F64U(rs1), 0, 63);
 					break;
@@ -1303,12 +1512,12 @@ void eval()
 			{
 				switch (funct3)
 				{
-				case 0b000: //FMIN.D
+				case 0b000: //[FMIN.D]
 				{
 					F64(rd) = fmin(F64(rs1), F64(rs2));
 					break;
 				}
-				case 0b001: //FMAX.D
+				case 0b001: //[FMAX.D]
 				{
 					F64(rd) = fmax(F64(rs1), F64(rs2));
 					break;
@@ -1323,12 +1532,23 @@ void eval()
 			{
 				switch (funct5)
 				{
-				case 0b00001: //FCVT.WU.D
+				case 0b00001: //[FCVT.WU.D]
 				{
-					X(rd) = UNSIGNED(F32(rs1));
+					X(rd) = (s64_t)UNSIGNED(F64(rs1));
 					break;
 				}
-
+#ifdef RV64D
+				case 0b00010: //[FCVT.L.D]
+				{
+					X(rd) = (s64_t)(F64(rs1));
+					break;
+				}
+				case 0b00011: //[FCVT.LU.D]
+				{
+					X(rd) = (u64_t)(F64(rs1));
+					break;
+				}
+#endif
 				default:
 					break;
 				}
@@ -1338,7 +1558,7 @@ void eval()
 			{
 				switch (funct5)
 				{
-				case 0b00001: //FCVT.S.D
+				case 0b00001: //[FCVT.S.D]
 				{
 					F32(rd) = F64(rs1);
 					break;
@@ -1353,7 +1573,7 @@ void eval()
 			{
 				switch (funct5)
 				{
-				case 0b00000: //FCVT.D.S
+				case 0b00000: //[FCVT.D.S]
 				{
 					F64(rd) = F32(rs1);
 					break;
@@ -1368,9 +1588,28 @@ void eval()
 			{
 				switch (funct5)
 				{
-				case 0b00000: //FCLASS.D
+				case 0b00000: //
 				{
-					X(rd) = UNSIGNED(1 << classify_double(F64(rs1)));
+					int funt3 = GET(ins, 12, 3);
+					switch (funt3)
+					{
+#ifdef RV64D
+					case 0b000: //[FMV.X.D]
+					{
+						X(rd) = F64U(rs1);
+						break;
+					}
+#endif
+					case 0b001: //[FCLASS.D]
+					{
+						X(rd) = UNSIGNED(1 << classify_double(F64(rs1)));
+						break;
+					}
+
+					default:
+						break;
+					}
+					
 					break;
 				}
 
@@ -1383,17 +1622,17 @@ void eval()
 			{
 				switch (funct3)
 				{
-				case 0b000: //FEQ.D
+				case 0b000: //[FEQ.D]
 				{
 					X(rd) = F64(rs1) == F64(rs2);
 					break;
 				}
-				case 0b001: //FLT.D
+				case 0b001: //[FLT.D]
 				{
 					X(rd) = F64(rs1) < F64(rs2);
 					break;
 				}
-				case 0b010: //FLE.D
+				case 0b010: //[FLE.D]
 				{
 					X(rd) = F64(rs1) <= F64(rs2);
 					break;
@@ -1408,22 +1647,40 @@ void eval()
 			{
 				switch (funct5)
 				{
-				case 0b00000: //FCVT.D.W
+				case 0b00000: //[FCVT.D.W]
 				{
 					F64(rd) = SIGNED(x[rs1]);
 					break;
 				}
-				case 0b00001: //FCVT.D.WU
+				case 0b00001: //[FCVT.D.WU]
 				{
-					F64(rd) = UNSIGNED(x[rs1]);
+					F64(rd) = (s32_t)UNSIGNED(x[rs1]);
 					break;
 				}
-
+#ifdef RV64D
+				case 0b00010: //[FCVT.D.L]
+				{
+					F64(rd) = (s64_t)(x[rs1]);
+					break;
+				}
+				case 0b00011: //[FCVT.D.LU]
+				{
+					F64(rd) = (u64_t)(x[rs1]);
+					break;
+				}
+#endif
 				default:
 					break;
 				}
 				break;
 			}
+#ifdef RV64D
+			case 0b1111001: //[FMV.D.X]
+			{
+				F64U(rd) = x[rs1];
+				break;
+			}
+#endif
 #endif
 			default:
 				break;
@@ -1431,76 +1688,158 @@ void eval()
 			break;
 		}
 #endif
-#ifdef RV32A
-#define AMO32(x) x
 
-		case 0b0101111: //R
+#if defined(RV32A) || defined(RV64A)
+#define AMO32(x) ((s32_t)(x))
+#define AMO64(x) ((s64_t)(x))
+
+		case 0b0101111: //[R]
 		{
-			int funct5 = GET(ins, 27, 31);
+			int funct5 = GET(ins, 27, 5);
+			int funct3 = GET(ins, 12, 3);
+
 			reg_t rd = GET(ins, 7, 5);
 			reg_t rs1 = GET(ins, 15, 5);
 			reg_t rs2 = GET(ins, 20, 5);
-			switch (funct5)
+#ifdef RV32A
+			if (funct3 == 0b010)
 			{
-			case 0b00010: //LR.W
-			{
+				switch (funct5)
+				{
+				case 0b00010: //[LR.W]
+				{
+					X(rd) = AMO32(M32(x[rs1]));
+					break;
+				}
+				case 0b00011: //[SC.W]
+				{
+					//如果存入成功，向寄存器 x[rd]中存入 0，否则存入一个非 0 的错误码
+					M32(x[rs1]) = x[rs2];
+					M32(x[rd]) = 0;
+					break;
+				}
+				case 0b00001: //[AMOSWAP.W]
+				{
+					X(rd) = AMO32(M32(x[rs1]));
+					M32(x[rs1]) = x[rs2];
+					// X(rd) = AMO32(M(x[rs1]) SWAP x[rs2]);
+					break;
+				}
+				case 0b00000: //[AMOADD.W]
+				{
+					X(rd) = AMO32(M32(x[rs1]) + x[rs2]);
+					break;
+				}
+				case 0b00100: //[AMOXOR.W]
+				{
+					X(rd) = AMO32(M32(x[rs1]) ^ x[rs2]);
+					break;
+				}
+				case 0b01100: //[AMOAND.W]
+				{
+					X(rd) = AMO32(M32(x[rs1]) & x[rs2]);
+					break;
+				}
+				case 0b01000: //[AMOOR.W]
+				{
+					X(rd) = AMO32(M32(x[rs1]) | x[rs2]);
+					break;
+				}
+				case 0b10000: //[AMOMIN.W]
+				{
+					X(rd) = AMO32(MIN(((s32_t)M32(x[rs1])), ((s32_t)x[rs2])));
+					break;
+				}
+				case 0b10100: //[AMOMAX.W]
+				{
+					X(rd) = AMO32(MAX(((s32_t)M32(x[rs1])), ((s32_t)x[rs2])));
+					break;
+				}
+				case 0b11000: //[AMOMINU.W]
+				{
+					X(rd) = AMO32(MIN(((u32_t)M32(x[rs1])), ((u32_t)x[rs2])));
+					break;
+				}
+				case 0b11100: //[AMOMAXU.W]
+				{
+					X(rd) = AMO32(MAX(((u32_t)M32(x[rs1])), ((u32_t)x[rs2])));
+					break;
+				}
+				default:
+					break;
+				}
 				break;
 			}
-			case 0b00011: //SC.W
+#endif
+#ifdef RV64A
+			if (funct3 == 0b011)
 			{
+				switch (funct5)
+				{
+				case 0b00010: //[LR.D]
+				{
+					X(rd) = AMO64(M64(x[rs1]));
+					break;
+				}
+				case 0b00011: //[SC.D]
+				{
+					M64(x[rs1]) = x[rs2];
+					M64(x[rd]) = 0;
+					break;
+				}
+				case 0b00001: //[AMOSWAP.D]
+				{
+					X(rd) = AMO64(M64(x[rs1]));
+					M64(x[rs1]) = x[rs2];
+					// X(rd) = AMO32(M(x[rs1]) SWAP x[rs2]);
+					break;
+				}
+				case 0b00000: //[AMOADD.D]
+				{
+					X(rd) = AMO64(M64(x[rs1]) + x[rs2]);
+					break;
+				}
+				case 0b00100: //[AMOXOR.D]
+				{
+					X(rd) = AMO64(M64(x[rs1]) ^ x[rs2]);
+					break;
+				}
+				case 0b01100: //[AMOAND.D]
+				{
+					X(rd) = AMO64(M64(x[rs1]) & x[rs2]);
+					break;
+				}
+				case 0b01000: //[AMOOR.D]
+				{
+					X(rd) = AMO64(M64(x[rs1]) | x[rs2]);
+					break;
+				}
+				case 0b10000: //[AMOMIN.D]
+				{
+					X(rd) = AMO64(MIN(((s64_t)M64(x[rs1])), ((s64_t)x[rs2])));
+					break;
+				}
+				case 0b10100: //[AMOMAX.D]
+				{
+					X(rd) = AMO32(MAX(((s64_t)M64(x[rs1])), ((s64_t)x[rs2])));
+					break;
+				}
+				case 0b11000: //[AMOMINU.D]
+				{
+					X(rd) = AMO64(MIN(((u64_t)M64(x[rs1])), ((u64_t)x[rs2])));
+					break;
+				}
+				case 0b11100: //[AMOMAXU.D]
+				{
+					X(rd) = AMO64(MAX(((u64_t)M64(x[rs1])), ((u64_t)x[rs2])));
+					break;
+				}
+				default:
+					break;
+				}
 				break;
 			}
-			case 0b00001: //AMOSWAP.W
-			{
-				X(rd) = M(x[rs1]);
-				M(x[rs1]) = x[rs2];
-				// X(rd) = AMO32(M(x[rs1]) SWAP x[rs2]);
-				break;
-			}
-			case 0b00000: //AMOADD.W
-			{
-				X(rd) = AMO32(M(x[rs1]) + x[rs2]);
-				break;
-			}
-			case 0b00100: //AMOXOR.W
-			{
-				X(rd) = AMO32(M(x[rs1]) ^ x[rs2]);
-				break;
-			}
-			case 0b01100: //AMOAND.W
-			{
-				X(rd) = AMO32(M(x[rs1]) & x[rs2]);
-				break;
-			}
-			case 0b01000: //AMOOR.W
-			{
-				X(rd) = AMO32(M(x[rs1]) | x[rs2]);
-				break;
-			}
-			case 0b10000: //AMOMIN.W
-			{
-				X(rd) = AMO32(MIN(SIGNED(M(x[rs1])), SIGNED(x[rs2])));
-				break;
-			}
-			case 0b10100: //AMOMAX.W
-			{
-				X(rd) = AMO32(MAX(SIGNED(M(x[rs1])), SIGNED(x[rs2])));
-				break;
-			}
-			case 0b11000: //AMOMINU.W
-			{
-				X(rd) = AMO32(MIN(UNSIGNED(M(x[rs1])), UNSIGNED(x[rs2])));
-				break;
-			}
-			case 0b11100: //AMOMAXU.W
-			{
-				X(rd) = AMO32(MAX(UNSIGNED(M(x[rs1])), UNSIGNED(x[rs2])));
-				break;
-			}
-			default:
-				break;
-			}
-			break;
+#endif
 		}
 #endif
 		default:
