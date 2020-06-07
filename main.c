@@ -9,6 +9,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "util.h"
+
 int debug_switch = 0;
 #define LOGD(...) (debug_switch ? printf(__VA_ARGS__) : 1)
 #define LOGI(...) printf(__VA_ARGS__)
@@ -45,6 +47,7 @@ typedef s32_t imm_t;
 
 u8_t memory[1024 * 1024 * (16 + 8 + 16)];
 u8_t uart[8];
+u8_t mtimer[0xc000];
 
 u32_t CSRs[0x1000];
 #ifdef RV64
@@ -106,6 +109,13 @@ static u64_t M64(addr_t addr)
 	addr_t m;
 	if (addr >= 0x80000000U && addr < 0x82800000U)
 		m = memory + addr - 0x80000000U;
+	else if (addr >= 0x02000000U && addr < (0x02000000U + 0xc000U))
+	{
+		if (addr == (0x02000000U + 0x4000U))
+		{
+		}
+		m = mtimer + addr - 0x02000000U;
+	}
 	else
 	{
 		LOGI("Out of memory!\n");
@@ -120,6 +130,13 @@ static u32_t M32(addr_t addr)
 	addr_t m;
 	if (addr >= 0x80000000U && addr < 0x82800000U)
 		m = memory + addr - 0x80000000U;
+	else if (addr >= 0x02000000U && addr < (0x02000000U + 0xc000U))
+	{
+		if (addr == (0x02000000U + 0x4000U))
+		{
+		}
+		m = mtimer + addr - 0x02000000U;
+	}
 	else
 	{
 		LOGI("Out of memory!\n");
@@ -150,9 +167,15 @@ static u8_t M8(addr_t addr)
 		m = memory + addr - 0x80000000U;
 	else if (addr >= 0x10000000U && addr < 0x10000008U)
 	{
-		if (addr == (0x10000000U + 0x05U))
+		if (addr == 0x10000000U)
 		{
-			return 0x1 << 6;
+			int ret = peekchar();
+			return (ret != -1) ? ret : 0;
+		}
+		else if (addr == (0x10000000U + 0x05U))
+		{
+			int ret = probchar();
+			return 0x1 << 6 | ((ret > 0) << 0);
 		}
 	}
 	else
@@ -169,6 +192,13 @@ static u64_t WM64(addr_t addr, u64_t value)
 	addr_t m;
 	if (addr >= 0x80000000U && addr < 0x82800000U)
 		m = memory + addr - 0x80000000U;
+	else if (addr >= 0x02000000U && addr < (0x02000000U + 0xc000U))
+	{
+		if (addr == (0x02000000U + 0x4000U))
+		{
+		}
+		m = mtimer + addr - 0x02000000U;
+	}
 	else
 	{
 		LOGI("Out of memory!\n");
@@ -216,8 +246,8 @@ static void WM8(addr_t addr, u8_t value)
 		if (addr == (0x10000000U))
 		{
 			printf("%c", value);
-			return;
 		}
+		m = uart + addr - 0x10000000U;
 	}
 	else
 	{
@@ -330,7 +360,6 @@ enum REGISTER
 	X31 = 31,
 	t6 = 31,
 };
-
 
 enum
 {
@@ -886,7 +915,7 @@ void eval()
 			case 0b000: //[I] [ADDIW]
 			{
 				imm_t imm = GET_I_IMM(ins);
-				X(rd) = S32(x[ rs1] + imm);
+				X(rd) = S32(x[rs1] + imm);
 				break;
 			}
 			case 0b001: //[R] [SLLIW]
@@ -2019,6 +2048,8 @@ int main(int argc, const char **argv)
 {
 	if (argc != 2)
 		return 1;
+	setbuf(stdout, NULL);
+	enableRawMode(STDIN_FILENO);
 
 	read_file(argv[1]);
 	eval();
