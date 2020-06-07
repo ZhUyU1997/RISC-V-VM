@@ -161,9 +161,6 @@ static void test_relative() {
     expect(1, -I(1) > 1U);
     expect(1, -I(1) >= 1U);
 
-    expect(1, -L(1L) > 1U);
-    expect(1, -L(1L) >= 1U);
-
     expect(0, -LL(1LL) > 1U);
     expect(0, -LL(1LL) >= 1U);
 

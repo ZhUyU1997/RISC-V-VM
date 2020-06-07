@@ -16,8 +16,8 @@ STRIP		:=	$(CROSS_COMPILE)strip
 
 export AS AR CC LD CPP CXX OC OD NM HOSTCC
 
-X_CFLAGS	+= -std=c11 -march=rv32imafd -mabi=ilp32d -mcmodel=medany -ffreestanding -O0
-X_ASFLAGS	+= -march=rv32imafd -mabi=ilp32d -mcmodel=medany -ffreestanding 
+X_CFLAGS	+= -std=c11 -march=rv64imafd -mabi=lp64d -mcmodel=medany -ffreestanding -O0
+X_ASFLAGS	+= -march=rv64imafd -mabi=lp64d -mcmodel=medany -ffreestanding 
 
 SRC			+= start.S test.c
 NAME		:= test.bin
