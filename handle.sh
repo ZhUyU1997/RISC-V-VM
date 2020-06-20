@@ -1,0 +1,1 @@
+riscv64-linux-gnu-nm -n ../xboot/output/xboot |  sed -n '/\w\+ [t|T] \w\+$/p' | sed 's|\(\w\+\) [tT] \(\w\+\)|{0x\1,"\2"},|' > nm.c
