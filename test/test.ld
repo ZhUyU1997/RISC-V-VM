@@ -4,7 +4,7 @@ ENTRY(_start)
 
 MEMORY
 {
-	ram  : org = 0x00000000, len = 256K
+	ram  : org = 0x80000000, len = 256K
 }
 
 SECTIONS
@@ -33,7 +33,7 @@ SECTIONS
 		. = ALIGN(8);
 	} > ram
 
-    PROVIDE(__stack_end = 0x00000000+256K);
+    PROVIDE(__stack_end = 0x80000000+256K);
 	/DISCARD/ : { *(.dynsym) }
 	/DISCARD/ : { *(.dynstr*) }
 	/DISCARD/ : { *(.dynamic*) }

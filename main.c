@@ -12,9 +12,11 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
+#include <pthread.h>
 
 #include "util.h"
 #include "macro.h"
+#include "fb.h"
 
 int debug_switch = 0;
 #define LOGD(...) (debug_switch ? printf(__VA_ARGS__) : 1)
@@ -73,6 +75,7 @@ typedef u32_t x_t;
 u8_t memory[1024 * 1024 * (16 + 8 + 16)];
 u8_t uart[8];
 u8_t mtimer[0xc000];
+u8_t fb[0x008];
 x_t CSRs[0x1000];
 x_t pc = 0x80000000U, x[33]; // virtual machine registers
 
@@ -168,14 +171,11 @@ static u64_t M64(addr_t addr)
 		}
 		else if (addr == (0x02000000U + 0xbff8U))
 		{
-			// u64_t temp = (clock());
-			// *(u64_t *)m = temp;
-			// printf("%p",clock());
 		}
 	}
 	else
 	{
-		LOGI("Out of memory! [Addr:%p]\n", addr);
+		LOGI("Out of memory! [Addr:%#016llx]\n", addr);
 		exit(0);
 	}
 
@@ -196,7 +196,7 @@ static u32_t M32(addr_t addr)
 	}
 	else
 	{
-		LOGI("Out of memory! [Addr:%p]\n", addr);
+		LOGI("Out of memory! [Addr:%#016llx]\n", addr);
 		exit(0);
 	}
 
@@ -210,7 +210,7 @@ static u16_t M16(addr_t addr)
 		m = memory + addr - 0x80000000U;
 	else
 	{
-		LOGI("Out of memory! [Addr:%p]\n", addr);
+		LOGI("Out of memory! [Addr:%#016llx]\n", addr);
 		exit(0);
 	}
 
@@ -238,7 +238,7 @@ static u8_t M8(addr_t addr)
 	}
 	else
 	{
-		LOGI("Out of memory! [Addr:%p]\n", addr);
+		LOGI("Out of memory! [Addr:%#016llx]\n", addr);
 		exit(0);
 	}
 
@@ -266,7 +266,7 @@ static u64_t WM64(addr_t addr, u64_t value)
 	}
 	else
 	{
-		LOGI("Out of memory! [Addr:%p]\n", addr);
+		LOGI("Out of memory! [Addr:%#016llx]\n", addr);
 		exit(0);
 	}
 
@@ -278,9 +278,20 @@ static u32_t WM32(addr_t addr, u32_t value)
 	addr_t m;
 	if (addr - 0x80000000U < 0x2800000U)
 		m = memory + addr - 0x80000000U;
+	else if (addr - 0x03000000U < 0x008U)
+	{	
+		m = fb + addr - 0x03000000U;
+		*(u32_t *)m = value;
+		if (addr == (0x03000000U + 0x004U))
+		{
+			addr_t fb_addr = *(u32_t *)fb;
+			framebuffer_present(memory + fb_addr - 0x80000000U,value);
+		}
+		return;
+	}
 	else
 	{
-		LOGI("Out of memory! [Addr:%p]\n", addr);
+		LOGI("Out of memory! [Addr:%#016llx]\n", addr);
 		exit(0);
 	}
 
@@ -294,7 +305,7 @@ static u16_t WM16(addr_t addr, u16_t value)
 		m = memory + addr - 0x80000000U;
 	else
 	{
-		LOGI("Out of memory! [Addr:%p]\n", addr);
+		LOGI("Out of memory! [Addr:%#016llx]\n", addr);
 		exit(0);
 	}
 
@@ -316,7 +327,7 @@ static void WM8(addr_t addr, u8_t value)
 	}
 	else
 	{
-		LOGI("Out of memory! [Addr:%p]\n", addr);
+		LOGI("Out of memory! [Addr:%#016llx]\n", addr);
 		exit(0);
 	}
 	*(u8_t *)m = value;
@@ -447,12 +458,14 @@ enum
 #define U128(x) ((u128_t)(x))
 #define S128(x) ((s128_t)(x))
 
-#define GET(x, offset, len) (((U32(x)) >> (offset)) & ((1 << (len)) - 1))
-#define GET_FIXED(x, offset, len) ((U32(x)) & (((1 << (len)) - 1) << (offset)))
+#define GENERIC_1(x) (_Generic((x),u32_t:1U,u64_t:1ULL,default:1))
+
+#define GET(x, offset, len) (((x) >> (offset)) & ((GENERIC_1(x)  << (len)) - 1))
+#define GET_FIXED(x, offset, len) ((x) & (((GENERIC_1(x)  << (len)) - 1) << (offset)))
 #define GET_FIXED_L(x, offset, len, offset2) (GET_FIXED((x), (offset), (len)) << ((offset2) - (offset)))
 #define GET_FIXED_R(x, offset, len, offset2) (GET_FIXED((x), (offset), (len)) >> ((offset) - (offset2)))
 #define GET_FIXED_SHIFT(x, offset, len, offset2) ((((offset2) > (offset))) ? (GET_FIXED_L(x, offset, len, offset2)) : (GET_FIXED_R(x, offset, len, offset2)))
-#define OPCODE(ins) GET((ins), 0, 7)
+#define OPCODE(ins) GET(U32(ins), 0, 7)
 
 #define GET_EXT(ins, width) U32(S32(GET_FIXED((ins), 31, 1)) >> ((width)-1))
 
@@ -485,7 +498,7 @@ enum
 
 #endif
 
-#define GET_C_EXT(ins, width) U32((S32(GET((ins), 12, 1)) << 31) >> ((width)-1))
+#define GET_C_EXT(ins, width) U32((S32(GET(U32(ins), 12, 1)) << 31) >> ((width)-1))
 
 int isnumber(float f)
 {
@@ -724,7 +737,7 @@ static int RVG(u32_t ins)
 		// 		printf("%s\r\n", s);
 		// 	}
 		// }
-		LOGD("jal %08X X[%d]=%d offset=%08X\n", pc, rd, x[rd], GET_J_IMM(ins));
+		LOGD("jal %08llX X[%d]=%lld offset=%08X\n", pc, rd, x[rd], GET_J_IMM(ins));
 		jump = 1;
 		break;
 	}
@@ -769,7 +782,7 @@ static int RVG(u32_t ins)
 		}
 		case 0b001: //[BNE]
 		{
-			LOGD("bne offset=%08X, x[%d]=%d, x[%d]=%d\n", offset, rs1, (x[rs1]), rs2, (x[rs2]));
+			LOGD("bne offset=%08X, x[%d]=%lld, x[%d]=%lld\n", offset, rs1, (x[rs1]), rs2, (x[rs2]));
 			if (x[rs1] != x[rs2])
 			{
 				pc += offset;
@@ -798,7 +811,7 @@ static int RVG(u32_t ins)
 		}
 		case 0b110: //[BLTU]
 		{
-			// LOGD("bltu offset=%08X, x[%d]=%u x[%d]=%u\n", offset, rs1,U32(x[rs1]), rs2,U32(x[rs2]));
+			// LOGD("bltu offset=%08X, x[%d]=%llu x[%d]=%llu\n", offset, rs1,U32(x[rs1]), rs2,U32(x[rs2]));
 			if (XU(rs1) < XU(rs2))
 			{
 				pc += offset;
@@ -830,44 +843,44 @@ static int RVG(u32_t ins)
 		{
 		case 0b000: //[LB]
 		{
-			LOGD("x%d=s8[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, S8(M8(x[rs1] + offset)));
+			LOGD("x%d=s8[x%d(%llu) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, S8(M8(x[rs1] + offset)));
 			X(rd) = S8(M8(x[rs1] + offset));
 			break;
 		}
 		case 0b001: //[LH]
 		{
-			LOGD("x%d=s16[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, S16(M16(x[rs1] + offset)));
+			LOGD("x%d=s16[x%d(%llu) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, S16(M16(x[rs1] + offset)));
 			X(rd) = S16(M16(x[rs1] + offset));
 			break;
 		}
 		case 0b010: //[LW]
 		{
-			LOGD("x%d=s32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, S32(M32(x[rs1] + offset)));
+			LOGD("x%d=s32[x%d(%llu) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, S32(M32(x[rs1] + offset)));
 			X(rd) = S32(M32(x[rs1] + offset));
 			break;
 		}
 		case 0b100: //[LBU]
 		{
-			LOGD("x%d=u8[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, U8(M8(x[rs1] + offset)));
+			LOGD("x%d=u8[x%d(%llu) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, U8(M8(x[rs1] + offset)));
 			X(rd) = M8(x[rs1] + offset);
 			break;
 		}
 		case 0b101: //[LHU]
 		{
-			LOGD("x%d=u16[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, U16(M16(x[rs1] + offset)));
+			LOGD("x%d=u16[x%d(%llu) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, U16(M16(x[rs1] + offset)));
 			X(rd) = M16(x[rs1] + offset);
 			break;
 		}
 #ifdef RV64I
 		case 0b110: //[LWU]
 		{
-			LOGD("x%d=u32[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, U32(M32(x[rs1] + offset)));
+			LOGD("x%d=u32[x%d(%llu) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, U32(M32(x[rs1] + offset)));
 			X(rd) = M32(x[rs1] + offset);
 			break;
 		}
 		case 0b011: //[LD]
 		{
-			LOGD("x%d=s64[x%d(%u) + offset(%d)](%d)\n", rd, rs1, x[rs1], offset, S64(M64(x[rs1] + offset)));
+			LOGD("x%d=s64[x%d(%llu) + offset(%d)](%lld)\n", rd, rs1, x[rs1], offset, S64(M64(x[rs1] + offset)));
 			X(rd) = (s64_t)(M64(x[rs1] + offset));
 			break;
 		}
@@ -887,21 +900,21 @@ static int RVG(u32_t ins)
 		{
 		case 0b000: //[SB]
 		{
-			LOGD("8[x%d(%u) + (%d)] = x%d(%u)\n", rs1, x[rs1], offset, rs2, x[rs2]);
+			LOGD("8[x%d(%llu) + (%d)] = x%d(%llu)\n", rs1, x[rs1], offset, rs2, x[rs2]);
 
 			WM8(x[rs1] + offset, XU8(rs2));
 			break;
 		}
 		case 0b001: //[SH]
 		{
-			LOGD("16[x%d(%u) + (%d)] = x%d(%u)\n", rs1, x[rs1], offset, rs2, x[rs2]);
+			LOGD("16[x%d(%llu) + (%d)] = x%d(%llu)\n", rs1, x[rs1], offset, rs2, x[rs2]);
 
 			WM16(x[rs1] + offset, XU16(rs2));
 			break;
 		}
 		case 0b010: //[SW]
 		{
-			LOGD("32[x%d(%u) + offset(%d)] = x%d(%u)\n", rs1, x[rs1], offset, rs2, x[rs2]);
+			LOGD("32[x%d(%llu) + offset(%d)] = x%d(%llu)\n", rs1, x[rs1], offset, rs2, x[rs2]);
 			if (U32(x[rs1] + offset) == 0xffffffff)
 				exit(0);
 			else if (U32(x[rs1] + offset) == 0xfffffffe)
@@ -915,7 +928,7 @@ static int RVG(u32_t ins)
 #ifdef RV64I
 		case 0b011: //[SD]
 		{
-			LOGD("64[x%d(%u) + offset(%d)] = x%d(%u)\n", rs1, x[rs1], offset, rs2, x[rs2]);
+			LOGD("64[x%d(%llu) + offset(%d)] = x%d(%llu)\n", rs1, x[rs1], offset, rs2, x[rs2]);
 			WM64(x[rs1] + offset, XU64(rs2));
 			break;
 		}
@@ -935,7 +948,7 @@ static int RVG(u32_t ins)
 		{
 		case 0b000: //[ADDI]
 		{
-			LOGD("x%d=x%d(%u)+imm(%d)\n", rd, rs1, x[rs1], imm);
+			LOGD("x%d=x%d(%llu)+imm(%d)\n", rd, rs1, x[rs1], imm);
 			X(rd) = x[rs1] + imm;
 			break;
 		}
@@ -1254,7 +1267,7 @@ static int RVG(u32_t ins)
 				X(rd) = S32((XS32(rs1) >> GET_SHIFT5(x[rs2])));
 				break;
 			}
-			case 0b0000001: //[DIVUW]dsx
+			case 0b0000001: //[DIVUW]
 			{
 				X(rd) = S32(XU32(rs1) / XU32(rs2));
 				break;
@@ -1382,14 +1395,6 @@ static int RVG(u32_t ins)
 		default:
 			break;
 		}
-		break;
-	}
-	case 0b0000001: //[DEBUG]
-	{
-		reg_t rd = GET(ins, 7, 5);
-		int funct3 = GET(ins, 12, 3);
-		if (funct3 == 0)
-			LOGD("x[%d]=%#X|%#d\n", rd, x[rd], x[rd]);
 		break;
 	}
 #if defined(RV32F) || defined(RV32D)
@@ -1585,7 +1590,7 @@ static int RVG(u32_t ins)
 			}
 			case 0b001: //[FSGNJN.S]
 			{
-				F32U(rd) = (GET_FIXED(F32U(rs2), 31, 1) ^ (1 << 31)) | GET_FIXED(F32U(rs1), 0, 31);
+				F32U(rd) = (GET_FIXED(F32U(rs2), 31, 1) ^ (1U << 31)) | GET_FIXED(F32U(rs1), 0, 31);
 				break;
 			}
 			case 0b010: //[FSGNJX.S]
@@ -1674,7 +1679,7 @@ static int RVG(u32_t ins)
 		{
 			switch (funct3)
 			{
-			case 0b000: //[FEQ.S]
+			case 0b010: //[FEQ.S]
 			{
 				X(rd) = F32(rs1) == F32(rs2);
 				break;
@@ -1684,7 +1689,7 @@ static int RVG(u32_t ins)
 				X(rd) = F32(rs1) < F32(rs2);
 				break;
 			}
-			case 0b010: //[FLE.S]
+			case 0b000: //[FLE.S]
 			{
 				X(rd) = F32(rs1) <= F32(rs2);
 				break;
@@ -1769,7 +1774,7 @@ static int RVG(u32_t ins)
 			}
 			case 0b001: //[FSGNJN.D]
 			{
-				F64U(rd) = (GET_FIXED(F64U(rs2), 63, 1) ^ (1 << 63)) | GET_FIXED(F64U(rs1), 0, 63);
+				F64U(rd) = (GET_FIXED(F64U(rs2), 63, 1) ^ (1ULL << 63)) | GET_FIXED(F64U(rs1), 0, 63);
 				break;
 			}
 			case 0b010: //[FSGNJX.D]
@@ -1807,9 +1812,14 @@ static int RVG(u32_t ins)
 		{
 			switch (funct5)
 			{
+			case 0b00000: //[FCVT.W.D]
+			{
+				X(rd) = S32(F64(rs1));
+				break;
+			}
 			case 0b00001: //[FCVT.WU.D]
 			{
-				X(rd) = S64(U32(F64(rs1)));
+				X(rd) = S32(U32(F64(rs1)));
 				break;
 			}
 #ifdef RV64D
@@ -1820,7 +1830,7 @@ static int RVG(u32_t ins)
 			}
 			case 0b00011: //[FCVT.LU.D]
 			{
-				X(rd) = U64((F64(rs1)));
+				X(rd) = U64(F64(rs1));
 				break;
 			}
 #endif
@@ -1897,7 +1907,7 @@ static int RVG(u32_t ins)
 		{
 			switch (funct3)
 			{
-			case 0b000: //[FEQ.D]
+			case 0b010: //[FEQ.D]
 			{
 				X(rd) = F64(rs1) == F64(rs2);
 				break;
@@ -1907,7 +1917,7 @@ static int RVG(u32_t ins)
 				X(rd) = F64(rs1) < F64(rs2);
 				break;
 			}
-			case 0b010: //[FLE.D]
+			case 0b000: //[FLE.D]
 			{
 				X(rd) = F64(rs1) <= F64(rs2);
 				break;
@@ -2265,6 +2275,7 @@ void eval()
 		u32_t ins;
 		int jump = 0;
 		u32_t op = GET(M16(pc), 0, 2);
+
 		x_t next_pc = pc;
 		if (op == 0b11)
 		{
@@ -2277,7 +2288,7 @@ void eval()
 		else
 		{
 			ins = M16(pc);
-			// LOGI("Compressed PC=%08x INS=%04X\n", pc, ins);
+			LOGD("Compressed PC=%016llx INS=%04X\n", pc, ins);
 			jump = RVC(ins, op);
 			next_pc += 2;
 			if (jump == -1)
@@ -2332,8 +2343,6 @@ static void read_file(const char *filename)
 	close(fd);
 }
 
-#include <pthread.h>
-
 static void *timer_function(void *ptr)
 {
 	struct timespec time1 = {0, 0};
@@ -2354,12 +2363,14 @@ int main(int argc, const char **argv)
 		return 1;
 	setbuf(stdout, NULL);
 	// enableRawMode(STDIN_FILENO);
-	pthread_t thread1;
+	pthread_t thread1,thread2;
 
-	int iret1 = pthread_create(&thread1, NULL, timer_function, NULL);
+	pthread_create(&thread1, NULL, timer_function, NULL);
+	pthread_create(&thread2, NULL, framebuffer_function, NULL);
 
 	read_file(argv[1]);
 	eval();
+	pthread_join(thread2, NULL);
 	pthread_join(thread1, NULL);
 	return 0;
 }
