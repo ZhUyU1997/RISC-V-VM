@@ -37,7 +37,7 @@ void *framebuffer_function(void *ptr)
     while (1)
     {
         pthread_mutex_lock(&mutex);
-        pthread_cond_wait(&cond,&mutex);
+        pthread_cond_wait(&cond, &mutex);
         SDL_LockTexture(gTexture, NULL, &pix, &pitch);
         // //为了生成颜色,使用rgba8888的格式
         // format = SDL_AllocFormat(SDL_PIXELFORMAT_RGBA8888);
@@ -58,8 +58,26 @@ void *framebuffer_function(void *ptr)
 void framebuffer_present(unsigned int *fb, unsigned int len)
 {
     frambuffer_fb = fb;
-    frambuffer_len= len;
+    frambuffer_len = len;
     pthread_mutex_lock(&mutex);
     pthread_cond_signal(&cond);
     pthread_mutex_unlock(&mutex);
+    SDL_Event event;
+    while (SDL_PollEvent(&event))
+    {
+        switch (event.type)
+        {
+        case SDL_MOUSEMOTION:
+            printf("Mouse moved by %d,%d to (%d,%d)\n",
+                   event.motion.xrel, event.motion.yrel,
+                   event.motion.x, event.motion.y);
+            break;
+        case SDL_MOUSEBUTTONDOWN:
+            printf("Mouse button %d pressed at (%d,%d)\n",
+                   event.button.button, event.button.x, event.button.y);
+            break;
+        case SDL_QUIT:
+            exit(0);
+        }
+    }
 }

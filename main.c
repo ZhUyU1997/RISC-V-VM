@@ -22,6 +22,9 @@ int debug_switch = 0;
 #define LOGD(...) (debug_switch ? printf(__VA_ARGS__) : 1)
 #define LOGI(...) printf(__VA_ARGS__)
 
+#define LOGD(...)
+#define LOGI(...)
+
 #define RV64
 #define RV32M
 #define RV32F
@@ -160,71 +163,66 @@ static char *search_function(u64_t addr)
 static u64_t pc_count = 0;
 static u64_t M64(addr_t addr)
 {
-	addr_t m;
 	if (addr - 0x80000000U < 0x2800000U)
-		m = memory + addr - 0x80000000U;
+		return *(u64_t *)(memory + addr - 0x80000000U);
 	else if (addr - 0x02000000U < 0xc000U)
 	{
-		m = mtimer + addr - 0x02000000U;
+		addr_t m = mtimer + addr - 0x02000000U;
 		if (addr == (0x02000000U + 0x4000U))
 		{
 		}
 		else if (addr == (0x02000000U + 0xbff8U))
 		{
 		}
+		return *(u64_t *)(mtimer + addr - 0x02000000U);
 	}
 	else
 	{
-		LOGI("Out of memory! [Addr:%#016llx]\n", addr);
-		exit(0);
+ 		exit(0);
+		return 0;
 	}
-
-	return *(u64_t *)m;
 }
 
 static u32_t M32(addr_t addr)
 {
-	addr_t m;
 	if (addr - 0x80000000U < 0x2800000U)
-		m = memory + addr - 0x80000000U;
+		return *(u32_t *)(memory + addr - 0x80000000U);
 	else if (addr - 0x02000000U < 0xc000U)
 	{
 		if (addr == (0x02000000U + 0x4000U))
 		{
 		}
-		m = mtimer + addr - 0x02000000U;
+		return *(u32_t *)(mtimer + addr - 0x02000000U);
 	}
 	else
 	{
 		LOGI("Out of memory! [Addr:%#016llx]\n", addr);
 		exit(0);
+		return 0;
 	}
-
-	return *(u32_t *)m;
 }
 
 static u16_t M16(addr_t addr)
 {
-	addr_t m;
 	if (addr - 0x80000000U < 0x2800000U)
-		m = memory + addr - 0x80000000U;
+		return *(u16_t *)(memory + addr - 0x80000000U);
 	else
 	{
 		LOGI("Out of memory! [Addr:%#016llx]\n", addr);
 		exit(0);
+		return 0;
 	}
-
-	return *(u16_t *)m;
 }
 
 static u8_t M8(addr_t addr)
 {
-	addr_t m;
 	if (addr - 0x80000000U < 0x2800000U)
-		m = memory + addr - 0x80000000U;
+	{
+		return *(u8_t *)(memory + addr - 0x80000000U);
+	}
 	else if (addr - 0x10000000U < 0x00000008U)
 	{
-		m = uart + addr - 0x10000000U;
+		addr_t m = uart + addr - 0x10000000U;
 		if (addr == 0x10000000U)
 		{
 			int ret = peekchar();
@@ -240,9 +238,8 @@ static u8_t M8(addr_t addr)
 	{
 		LOGI("Out of memory! [Addr:%#016llx]\n", addr);
 		exit(0);
+		return 0;
 	}
-
-	return *(u8_t *)m;
 }
 
 static u64_t WM64(addr_t addr, u64_t value)
@@ -680,7 +677,7 @@ static void WCSR(addr_t addr, x_t value)
 	*(x_t *)m = value;
 }
 
-static inline int check_exception()
+static inline void check_exception()
 {
 	if ((CSR(MSTATUS) & MSTATUS_MIE) && (CSR(MIE) & MIE_MTIE))
 	{
@@ -690,7 +687,7 @@ static inline int check_exception()
 		{
 			WCSR(MCAUSE, (1UL << (XLEN - 1)) | 7);
 			WCSR(MIP, CSR(MIP) | MIP_MTIP);
-			WCSR(MEPC, pc + 4);
+			WCSR(MEPC, pc);
 
 			x_t t = CSR(MSTATUS);
 			bit64_t b = *(bit64_t *)&t;
@@ -698,15 +695,13 @@ static inline int check_exception()
 			b._3 = 0;	 //MIE=0
 			t = *(x_t *)&b;
 			WCSR(MSTATUS, t);
-			return 1;
+			pc = CSR(MTVEC);
 		}
 	}
-	return 0;
 }
 
-static int RVG(u32_t ins)
+static void RVG(u32_t ins)
 {
-	int jump = 0;
 	switch (OPCODE(ins))
 	{
 	case 0b0110111: //[U] LUI
@@ -738,7 +733,7 @@ static int RVG(u32_t ins)
 		// 	}
 		// }
 		LOGD("jal %08llX X[%d]=%lld offset=%08X\n", pc, rd, x[rd], GET_J_IMM(ins));
-		jump = 1;
+		return;
 		break;
 	}
 	case 0b1100111: //[I] [JALR]
@@ -760,7 +755,7 @@ static int RVG(u32_t ins)
 		// 		printf("%s\r\n", s);
 		// 	}
 		// }
-		jump = 1;
+		return;
 		break;
 	}
 	case 0b1100011: //[B]
@@ -776,7 +771,7 @@ static int RVG(u32_t ins)
 			if (x[rs1] == x[rs2])
 			{
 				pc += offset;
-				jump = 1;
+				return;
 			}
 			break;
 		}
@@ -786,7 +781,7 @@ static int RVG(u32_t ins)
 			if (x[rs1] != x[rs2])
 			{
 				pc += offset;
-				jump = 1;
+				return;
 			}
 			break;
 		}
@@ -795,7 +790,7 @@ static int RVG(u32_t ins)
 			if (XS(rs1) < XS(rs2))
 			{
 				pc += offset;
-				jump = 1;
+				return;
 			}
 			break;
 		}
@@ -805,7 +800,7 @@ static int RVG(u32_t ins)
 			if (XS(rs1) >= XS(rs2))
 			{
 				pc += offset;
-				jump = 1;
+				return;
 			}
 			break;
 		}
@@ -815,7 +810,7 @@ static int RVG(u32_t ins)
 			if (XU(rs1) < XU(rs2))
 			{
 				pc += offset;
-				jump = 1;
+				return;
 			}
 			break;
 		}
@@ -824,7 +819,7 @@ static int RVG(u32_t ins)
 			if (XU(rs1) >= XU(rs2))
 			{
 				pc += offset;
-				jump = 1;
+				return;
 			}
 			break;
 		}
@@ -1344,7 +1339,7 @@ static int RVG(u32_t ins)
 				b._7 = 1;	 //MPIE=1
 				t = *(x_t *)&b;
 				WCSR(MSTATUS, t);
-				jump = 1;
+				return;
 			}
 			break;
 		}
@@ -2154,12 +2149,12 @@ static int RVG(u32_t ins)
 		LOGI("非法指令 pc:%016llx ins:%08X op:%08x\n", pc, ins, OPCODE(ins));
 		exit(1);
 	}
-	return jump;
+	pc += 4;
 }
 
-int RVC(u16_t ins, int op)
+static void RVC(u16_t ins)
 {
-	switch (op)
+	switch (GET(ins, 0, 2))
 	{
 		CASE(0b00,
 			u32_t func3 = GET(ins, 13, 3);
@@ -2189,7 +2184,7 @@ int RVC(u16_t ins, int op)
 						// [C.NOP]
 					} else { // [C.ADDI]
 						X(rd) = x[rd] + imm;
-					} return 0;)
+					})
 				CASE(0b001, )
 				CASE(0b010, )
 				CASE(0b011, )
@@ -2206,7 +2201,8 @@ int RVC(u16_t ins, int op)
 					reg_t rs1 = GET(ins, 7, 3) + 8;
 					if (x[rs1] == 0) {
 						pc += offset;
-					} return 1;) // [C.BEQZ]
+						return;
+					}) // [C.BEQZ]
 				CASE(
 					0b111,
 
@@ -2220,8 +2216,8 @@ int RVC(u16_t ins, int op)
 					// LOGI("[C.BNEZ] x%d %08x\n",rs1,offset);
 					if (x[rs1] != 0) {
 						pc += offset;
-						return 1;
-					} return 0;) // [C.BNEZ]
+						return;
+					}) // [C.BNEZ]
 				DEFAULT()
 			})
 		CASE(
@@ -2242,18 +2238,15 @@ int RVC(u16_t ins, int op)
 						if (rs2 != 0 && rd != 0) // [C.ADD]
 						{
 							X(rd) = x[rd] + x[rs2];
-							return 0;
 						}
 					} else {
 						if (rs2 != 0 && rd != 0) // [C.MV]
 						{
 							X(rd) = x[rs2];
-							return 0;
 						}
 						else if (rs1 != 0 && rs2 == 0) // [C.JR]
 						{
 							pc = x[rs1];
-							return 1;
 						}
 					}
 
@@ -2265,48 +2258,25 @@ int RVC(u16_t ins, int op)
 			})
 		DEFAULT()
 	}
-	return -1;
+	pc += 2;
 }
 
 void eval()
 {
 	for (;;)
 	{
-		u32_t ins;
-		int jump = 0;
-		u32_t op = GET(M16(pc), 0, 2);
-
-		x_t next_pc = pc;
-		if (op == 0b11)
+		u32_t ins = M32(pc);
+		if (GET(ins, 0, 2) == 0b11)
 		{
-			ins = M32(pc);
-			pc_count++;
 			LOGD("PC=%016llx INS=%08X\n", pc, ins);
-			jump = RVG(ins);
-			next_pc += 4;
+			RVG(ins);
 		}
 		else
 		{
-			ins = M16(pc);
 			LOGD("Compressed PC=%016llx INS=%04X\n", pc, ins);
-			jump = RVC(ins, op);
-			next_pc += 2;
-			if (jump == -1)
-			{
-				exit(0);
-			}
+			RVC(ins);
 		}
-
-		if (check_exception())
-		{
-			pc = CSR(MTVEC);
-			jump = 1;
-		}
-
-		if (!jump)
-		{
-			pc = next_pc;
-		}
+		check_exception();
 	}
 }
 
@@ -2357,10 +2327,17 @@ static void *timer_function(void *ptr)
 	}
 }
 
+#ifdef PROFILE
+#include <gperftools/profiler.h>
+#endif
 int main(int argc, const char **argv)
 {
 	if (argc != 2)
 		return 1;
+#ifdef PROFILE
+	ProfilerStart("test.prof");//开启性能分析
+	atexit(ProfilerStop);
+#endif
 	setbuf(stdout, NULL);
 	// enableRawMode(STDIN_FILENO);
 	pthread_t thread1,thread2;
